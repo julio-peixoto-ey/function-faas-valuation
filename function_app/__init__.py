@@ -16,11 +16,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         elif req.method == "POST":
             return _handle_file_upload(req)
         else:
-            return upload_file_service._create_error_response("Método não suportado", 405)
+            return _create_error_response("Método não suportado", 405)
             
     except Exception as e:
         logging.error(f"Erro na função: {str(e)}")
-        return upload_file_service._create_error_response(f"Erro interno: {str(e)}", 500)
+        return _create_error_response(f"Erro interno: {str(e)}", 500)
 
 def _handle_info_request() -> func.HttpResponse:
     info = {
@@ -54,7 +54,17 @@ def _handle_file_upload(req: func.HttpRequest) -> func.HttpResponse:
         
     except ValueError as e:
         logging.error(f"Erro de validação: {str(e)}")
-        return upload_file_service._create_error_response(f"Erro de validação: {str(e)}", 400)
+        return _create_error_response(f"Erro de validação: {str(e)}", 400)
     except Exception as e:
         logging.error(f"Erro ao processar arquivo: {str(e)}")
-        return upload_file_service._create_error_response(f"Erro no processamento: {str(e)}", 500)
+        return _create_error_response(f"Erro no processamento: {str(e)}", 500)
+
+
+def _create_error_response(message: str, status_code: int) -> func.HttpResponse:
+    error_response = ErrorResponse(error=message)
+
+    return func.HttpResponse(
+        json.dumps(error_response.to_dict(), ensure_ascii=False),
+        mimetype="application/json",
+        status_code=status_code,
+    )

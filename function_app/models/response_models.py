@@ -13,7 +13,7 @@ class FileUploadResponse:
     total_tokens: int
     processing_time_ms: int
     token_summary: TokenSummary
-    documents_preview: List[Dict[str, Any]]
+    documents: List[Dict[str, Any]]
     message: str = "Arquivo processado com sucesso"
     
     def to_dict(self) -> Dict:
@@ -31,7 +31,7 @@ class FileUploadResponse:
                 'total_tokens': self.token_summary.total_tokens
             },
             'token_summary': self.token_summary.to_dict(),
-            'documents_preview': self.documents_preview
+            'documents': self.documents
         }
 
 @dataclass

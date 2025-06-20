@@ -10,6 +10,8 @@ from ..models.response_models import FileUploadResponse
 import base64
 from ..models.response_models import ErrorResponse
 import json
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from tiktoken import encoding_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -21,52 +23,53 @@ class UploadFileService:
         self.supported_extension = ".pdf"
         self.token_counter = TokenCounter()
         self.req = req
+        self.splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+            encoding_name="o200k_base",
+            chunk_size=800,
+            chunk_overlap=120,
+            separators=["\n\n", "\n", " ", ""],
+        )
 
     def process_file_upload(self) -> FileUploadResponse:
         file_content, filename = self._extract_file_from_request()
 
         if not self.is_supported_file(filename):
-            return self._create_error_response(
-                "Apenas arquivos PDF são suportados", 400
-            )
+            raise ValueError("Apenas arquivos PDF são suportados")
 
         logging.info(
             f"Processando arquivo: {filename}, tamanho: {len(file_content)} bytes"
         )
 
         documents = self.extract_text_from_pdf(file_content, filename)
-
         all_texts = [doc.page_content for doc in documents]
-        total_tokens = self.token_counter.log_embedding_usage(all_texts)
+        all_chunks = self.split_pages(all_texts)
+        total_tokens = self.token_counter.log_embedding_usage(all_chunks)
         token_summary = self.token_counter.get_summary()
 
-        documents_preview = [
-            {
-                "page": doc.page_number,
-                "characters": doc.character_count,
-                "tokens": doc.token_count,
-                "preview": doc.preview,
-            }
-            for doc in documents[:3]
-        ]
+        chunk_data = []
+        for idx, chunk in enumerate(all_chunks):
+            chunk_data.append({
+                "chunk_id": idx + 1,
+                "content": base64.b64encode(chunk.encode()).decode(),
+                "tokens": len(chunk.split()),
+                "page": (idx // len(documents)) + 1,
+            })
 
         response = FileUploadResponse(
             success=True,
             filename=filename,
             file_type="pdf",
-            documents_count=len(documents),
-            total_characters=sum(doc.character_count for doc in documents),
+            documents_count=len(chunk_data),
+            total_characters=sum(len(chunk) for chunk in all_chunks),
             total_tokens=total_tokens,
             processing_time_ms=0,
             token_summary=token_summary,
-            documents_preview=documents_preview,
+            documents=chunk_data,
         )
 
         return response
 
-    def extract_text_from_pdf(
-        self, file_content: bytes, filename: str
-    ) -> List[DocumentModel]:
+    def extract_text_from_pdf(self, file_content: bytes, filename: str) -> List[DocumentModel]:
         """
         Extrai texto de um arquivo PDF
 
@@ -76,9 +79,6 @@ class UploadFileService:
 
         Returns:
             Lista de DocumentModel com o texto extraído por página
-
-        Raises:
-            Exception: Se houver erro na extração do texto
         """
         documents = []
         temp_path = None
@@ -153,11 +153,16 @@ class UploadFileService:
 
         raise ValueError("Nenhum arquivo foi enviado ou formato não reconhecido")
 
-    def _create_error_response(message: str, status_code: int) -> func.HttpResponse:
-        error_response = ErrorResponse(error=message)
+    def split_pages(self, pages: list[str]) -> list[str]:
+        """
+        Divide as páginas do documento em chunks com sobreposição.
 
-        return func.HttpResponse(
-            json.dumps(error_response.to_dict(), ensure_ascii=False),
-            mimetype="application/json",
-            status_code=status_code,
-        )
+        Args:
+            pages: Lista de páginas do documento em formato de texto.
+
+        Returns:
+            Lista de chunks do documento.
+        """
+        joined = "\n".join(pages)
+        return self.splitter.split_text(joined)
+    

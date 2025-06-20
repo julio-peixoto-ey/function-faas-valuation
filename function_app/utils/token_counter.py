@@ -19,17 +19,6 @@ class TokenCounter:
     def count_tokens(self, text: str) -> int:
         return len(self.encoding.encode(text))
     
-    def log_llm_usage(self, prompt: str, response: str) -> tuple[int, int]:
-        input_tokens = self.count_tokens(prompt)
-        output_tokens = self.count_tokens(response)
-        
-        self.usage.input_tokens += input_tokens
-        self.usage.output_tokens += output_tokens
-        self.usage.api_calls += 1
-        
-        logger.info(f"LLM Call #{self.usage.api_calls} - Input: {input_tokens} tokens, Output: {output_tokens} tokens")
-        return input_tokens, output_tokens
-    
     def log_embedding_usage(self, texts: List[str]) -> int:
         total_tokens = sum(self.count_tokens(text) for text in texts)
         self.usage.embedding_tokens += total_tokens

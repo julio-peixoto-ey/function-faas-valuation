@@ -4,18 +4,6 @@ from .file_models import DocumentModel
 from .token_models import TokenSummary
 
 @dataclass
-class ApiResponse:
-    success: bool
-    message: str
-    data: Optional[Dict[str, Any]] = None
-    error: Optional[str] = None
-    timestamp: Optional[str] = None
-    
-    def to_dict(self) -> Dict:
-        result = asdict(self)
-        return {k: v for k, v in result.items() if v is not None}
-
-@dataclass
 class FileUploadResponse:
     success: bool
     filename: str

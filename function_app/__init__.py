@@ -7,6 +7,7 @@ from .utils.token_counter import TokenCounter
 from .models.response_models import FileUploadResponse, ErrorResponse
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    upload_file_service = UploadFileService(req)
     logging.info("Azure Function processando requisição")
     
     try:
@@ -15,11 +16,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         elif req.method == "POST":
             return _handle_file_upload(req)
         else:
-            return _create_error_response("Método não suportado", 405)
+            return upload_file_service._create_error_response("Método não suportado", 405)
             
     except Exception as e:
         logging.error(f"Erro na função: {str(e)}")
-        return _create_error_response(f"Erro interno: {str(e)}", 500)
+        return upload_file_service._create_error_response(f"Erro interno: {str(e)}", 500)
 
 def _handle_info_request() -> func.HttpResponse:
     info = {

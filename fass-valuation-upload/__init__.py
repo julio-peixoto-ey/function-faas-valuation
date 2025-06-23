@@ -1,13 +1,10 @@
 import azure.functions as func
 import json
 import logging
-import base64
 from .services.upload_file_service import UploadFileService
-from .utils.token_counter import TokenCounter
-from .models.response_models import FileUploadResponse, ErrorResponse, BulkFileUploadResponse
+from .models.response_models import ErrorResponse
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
-    upload_file_service = UploadFileService(req)
     logging.info("Azure Function processando requisição")
     
     try:

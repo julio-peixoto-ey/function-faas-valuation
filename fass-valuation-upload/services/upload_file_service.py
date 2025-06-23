@@ -66,12 +66,10 @@ class UploadFileService:
                 )
                 processed_files.append(error_response)
 
-        bulk_filename = all_filenames[0] if len(all_filenames) == 1 else f"bulk_upload_{len(all_filenames)}_files"
         success = any(file_resp.success for file_resp in processed_files)
 
         response = BulkFileUploadResponse(
             success=success,
-            filename=bulk_filename,
             files=processed_files
         )
 

@@ -9,9 +9,7 @@ import azure.functions as func
 from ..models.response_models import FileUploadResponse, BulkFileUploadResponse
 import base64
 from ..models.response_models import ErrorResponse
-import json
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from tiktoken import encoding_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -86,9 +84,9 @@ class UploadFileService:
         for idx, chunk in enumerate(all_chunks):
             chunk_data.append({
                 "chunk_id": idx + 1,
-                "content": base64.b64encode(chunk.encode()).decode(),
+                "content": base64.b64encode(chunk.encode('utf-8')).decode('utf-8'),
                 "tokens": len(chunk.split()),
-                "page": (idx // len(documents)) + 1,
+                "page": self._get_chunk_page(idx, len(documents)),
             })
 
         response = FileUploadResponse(
@@ -104,6 +102,12 @@ class UploadFileService:
         )
 
         return response
+
+    def _get_chunk_page(self, chunk_index: int, total_pages: int) -> int:
+        if total_pages == 0:
+            return 1
+        page = (chunk_index % total_pages) + 1
+        return page
 
     def extract_text_from_pdf(self, file_content: bytes, filename: str) -> List[DocumentModel]:
         documents = []

@@ -4,7 +4,7 @@ import logging
 import base64
 from .services.upload_file_service import UploadFileService
 from .utils.token_counter import TokenCounter
-from .models.response_models import FileUploadResponse, ErrorResponse
+from .models.response_models import FileUploadResponse, ErrorResponse, BulkFileUploadResponse
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     upload_file_service = UploadFileService(req)
@@ -44,7 +44,10 @@ def _handle_file_upload(req: func.HttpRequest) -> func.HttpResponse:
     try:
         response = upload_file_service.process_file_upload()
         
-        logging.info(f"Processamento concluído: {response.documents_count} páginas, {response.total_tokens} tokens")
+        total_documents = sum(file_resp.documents_count for file_resp in response.files)
+        total_tokens = sum(file_resp.total_tokens for file_resp in response.files)
+        
+        logging.info(f"Processamento concluído: {len(response.files)} arquivo(s), {total_documents} páginas totais, {total_tokens} tokens totais")
         
         return func.HttpResponse(
             json.dumps(response.to_dict(), ensure_ascii=False),

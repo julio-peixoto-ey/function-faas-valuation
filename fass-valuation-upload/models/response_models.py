@@ -33,6 +33,19 @@ class FileUploadResponse:
             'token_summary': self.token_summary.to_dict(),
             'documents': self.documents
         }
+        
+@dataclass
+class BulkFileUploadResponse:
+    success: bool
+    filename: str
+    files: List[FileUploadResponse]
+    
+    def to_dict(self) -> Dict:
+        return {
+            'success': self.success,
+            'filename': self.filename,
+            'files': [file.to_dict() for file in self.files]
+        }
 
 @dataclass
 class ErrorResponse:

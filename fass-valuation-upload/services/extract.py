@@ -18,7 +18,7 @@ AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
 AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
 AZURE_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_EMBEDDING_DEPLOYMENT")
-DEPLOYMENT_NAME_EMBEDDING = os.getenv("DEPLOYMENT_NAME_EMBEDDING")
+
 
 class DocumentEntityExtractor:
     """Extrator de entidades específicas de documentos usando embeddings"""
@@ -28,17 +28,17 @@ class DocumentEntityExtractor:
         self.llm = AzureChatOpenAI(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
-            azure_deployment=AZURE_DEPLOYMENT_NAME,
-            api_version=AZURE_OPENAI_API_VERSION,
+            azure_deployment="gpt-4o",
+            api_version="2024-06-01",
             temperature=0.1,
             max_tokens=2000
         )
-        
+
         self.embeddings = AzureOpenAIEmbeddings(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
-            azure_deployment=DEPLOYMENT_NAME_EMBEDDING,
-            api_version=AZURE_OPENAI_API_VERSION,
+            azure_deployment="text-embedding-3-large",
+            api_version="2024-06-01",
         )
         
     def create_vector_store_from_chunks(self, document_chunks: List[Dict[str, Any]]) -> FAISS:

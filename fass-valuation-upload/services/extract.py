@@ -100,7 +100,6 @@ class DocumentEntityExtractor:
             all_page_refs = set()
             
             for doc, score in docs:
-                score_float = float(score)
                 context_parts.append(f"Chunk {doc.metadata.get('chunk_id', 'N/A')} (página {doc.metadata.get('page', 'N/A')}):\n{doc.page_content}")
                 if 'page' in doc.metadata:
                     all_page_refs.add(int(doc.metadata['page']))

@@ -2,7 +2,6 @@ from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 import logging as logger
-from dotenv import load_dotenv
 import os
 import time
 import base64
@@ -11,14 +10,24 @@ from typing import List, Optional, Dict, Any
 from ..models.entites_models import ExtractedEntity, ContractEntity, DocumentExtractionResult
 from ..utils.token_counter import TokenCounter
 
-load_dotenv()
+def get_required_env_var(var_name: str, default_value: str = None) -> str:
+    value = os.getenv(var_name, default_value)
+    if not value:
+        logger.error(f"Variável de ambiente obrigatória não encontrada: {var_name}")
+        raise ValueError(f"Variável de ambiente {var_name} não configurada")
+    return value
 
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY")
-AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
-AZURE_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_EMBEDDING_DEPLOYMENT")
-
+try:
+    AZURE_OPENAI_ENDPOINT = get_required_env_var("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_KEY = get_required_env_var("AZURE_OPENAI_KEY") 
+    AZURE_DEPLOYMENT_NAME = get_required_env_var("AZURE_DEPLOYMENT_NAME")
+    AZURE_OPENAI_API_VERSION = get_required_env_var("AZURE_OPENAI_API_VERSION", "2024-06-01")
+    AZURE_EMBEDDING_DEPLOYMENT = get_required_env_var("AZURE_EMBEDDING_DEPLOYMENT")
+    
+    logger.info("Todas as variáveis de ambiente carregadas com sucesso")
+except ValueError as e:
+    logger.error(f"Erro na configuração: {e}")
+    raise
 
 class DocumentEntityExtractor:
     """Extrator de entidades específicas de documentos usando embeddings"""
@@ -28,8 +37,8 @@ class DocumentEntityExtractor:
         self.llm = AzureChatOpenAI(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
-            azure_deployment="gpt-4o",
-            api_version="2024-06-01",
+            azure_deployment=AZURE_DEPLOYMENT_NAME,
+            api_version=AZURE_OPENAI_API_VERSION,
             temperature=0.1,
             max_tokens=2000
         )
@@ -37,8 +46,8 @@ class DocumentEntityExtractor:
         self.embeddings = AzureOpenAIEmbeddings(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
-            azure_deployment="text-embedding-3-large",
-            api_version="2024-06-01",
+            azure_deployment=AZURE_EMBEDDING_DEPLOYMENT,
+            api_version=AZURE_OPENAI_API_VERSION,
         )
         
     def create_vector_store_from_chunks(self, document_chunks: List[Dict[str, Any]]) -> FAISS:

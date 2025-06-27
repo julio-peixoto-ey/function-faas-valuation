@@ -87,6 +87,9 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
         extractor = DocumentEntityExtractor()
         extraction_results = []
         
+        tabelas_faas = []
+        resumo_faas = []
+        
         for file_response in upload_response.files:
             if file_response.success:
                 logging.info(f"Extraindo entidades do arquivo: {file_response.filename}")
@@ -98,7 +101,18 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
                     file_response.filename
                 )
                 extraction_results.append(extraction_result)
-                
+                if extraction_result.success:
+                    tabela_contrato = extractor.create_tabela_faas(
+                        extraction_result.contract_entities, 
+                        file_response.filename
+                    )
+                    tabelas_faas.extend(tabela_contrato)
+                    linha_resumo = extractor.create_row_faas_resumo(
+                        extraction_result.contract_entities, 
+                        file_response.filename
+                    )
+                    if linha_resumo:
+                        resumo_faas.append(linha_resumo)
                 successful_entities = sum(
                     1 for field_name in extraction_result.contract_entities.__dataclass_fields__
                     if getattr(extraction_result.contract_entities, field_name) is not None
@@ -141,8 +155,16 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
         
         logging.info(f"Processamento completo: {successful_extractions}/{total_documents} documentos processados com sucesso")
         logging.info(f"Entidades extraídas: {total_entities_found}/{total_entities_possible} em {total_processing_time}ms")
+        logging.info(f"Tabelas FAAS geradas: {len(tabelas_faas)} linhas detalhadas, {len(resumo_faas)} linhas de resumo")
         
         response_data = final_response.to_dict()
+        
+        response_data['faas_tables'] = {
+            'tabela_detalhada': tabelas_faas,
+            'tabela_resumo': resumo_faas,
+            'total_linhas_detalhadas': len(tabelas_faas),
+            'total_contratos': len(resumo_faas)
+        }
         
         return func.HttpResponse(
             safe_json_dumps(response_data),

@@ -6,9 +6,10 @@ import os
 import time
 import base64
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from ..models.entites_models import ExtractedEntity, ContractEntity, DocumentExtractionResult
 from ..utils.token_counter import TokenCounter
+import re
 
 def get_required_env_var(var_name: str, default_value: str = None) -> str:
     value = os.getenv(var_name, default_value)
@@ -18,11 +19,11 @@ def get_required_env_var(var_name: str, default_value: str = None) -> str:
     return value
 
 try:
-    AZURE_OPENAI_ENDPOINT = get_required_env_var("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_KEY = get_required_env_var("AZURE_OPENAI_KEY") 
-    AZURE_DEPLOYMENT_NAME = get_required_env_var("AZURE_DEPLOYMENT_NAME")
-    AZURE_OPENAI_API_VERSION = get_required_env_var("AZURE_OPENAI_API_VERSION", "2024-06-01")
-    AZURE_EMBEDDING_DEPLOYMENT = get_required_env_var("AZURE_EMBEDDING_DEPLOYMENT")
+    AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+    AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY") 
+    AZURE_DEPLOYMENT_NAME = os.getenv("AZURE_DEPLOYMENT_NAME")
+    AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-06-01")
+    AZURE_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_EMBEDDING_DEPLOYMENT")
     
     logger.info("Todas as variáveis de ambiente carregadas com sucesso")
 except ValueError as e:
@@ -107,42 +108,73 @@ class DocumentEntityExtractor:
             full_context = "\n\n---\n\n".join(context_parts)
             
             prompt = f"""
-            Analise o contexto do documento financeiro e extraia as informações específicas solicitadas.
+            Você é um(a) **analista sênior de contratos financeiros**.  
+            Sua tarefa é **LER** o texto abaixo e **DEVOLVER** exatamente **um** objeto
+            JSON com os nove campos pedidos, **somente strings** (nunca arrays),
+            no formato mostrado depois da lista.
 
-            CONTEXTO DO DOCUMENTO:
+            ────────────────────────── CONTEXTO ──────────────────────────
             {full_context}
+            ───────────────────────────────────────────────────────────────
 
-            INSTRUÇÕES IMPORTANTES:
-            - Para cada item, extraia EXATAMENTE a informação encontrada no documento
-            - Se não encontrar a informação, responda "NÃO ENCONTRADO"
-            - Responda sempre com STRING (texto), nunca com arrays ou listas
-            - Se encontrar múltiplos valores, junte-os com vírgula em uma única string
-            - Seja preciso e objetivo
-            - Mantenha o formato JSON estrito
+            REGRAS OBRIGATÓRIAS
+            1. Copie o conteúdo **exatamente como está no contrato** – não traduza
+            nem reescreva números, índices ou datas.
+            2. Se o item não existir, responda **"NÃO ENCONTRADO"**.
+            3. Se houver mais de um valor para o mesmo item, una-os em **uma única
+            string separada por vírgulas**, mantendo a ordem em que aparecem.
+            4. Retorne apenas o JSON válido (sem comentários, sem texto antes ou
+            depois).
 
-            EXTRAIA AS SEGUINTES INFORMAÇÕES:
+            ITENS QUE DEVEM SER EXTRAÍDOS  
+            (***guias de busca*** entre colchetes ajudam a localizar no contrato)
 
-            1. ATUALIZAÇÃO MONETÁRIA: Índices de correção (IPCA, IGPM, SELIC, etc.)
-            2. JUROS REMUNERATÓRIOS: Indexação principal (DI, CDI, taxa pré-fixada, etc.)
-            3. SPREAD FIXO: Percentual de spread ou sobretaxa (ex: 2% a.a., 1.5% ao ano)
-            4. BASE DE CÁLCULO: Metodologia de cálculo (252 dias úteis, 365 dias corridos, etc.)
-            5. DATA EMISSÃO: Data de emissão, subscrição ou início de vigência
-            6. DATA VENCIMENTO: Data de vencimento, resgate ou término da operação
-            7. VALOR NOMINAL UNITÁRIO: Valor nominal unitário, valor da cota ou valor principal
-            8. FLUXOS PAGAMENTO: Datas específicas de pagamento de juros e amortização
-            9. FLUXOS PERCENTUAIS: Percentuais ou frações de amortização para cada data
+            1. **ATUALIZAÇÃO MONETÁRIA** – índice que corrige o **principal**  
+            [palavras-chave: “atualização monetária”, “índice de correção”,
+            “IPCA”, “IGP-M”, “SELIC”, “não haverá atualização”].
 
-            RESPONDA EM JSON VÁLIDO COM STRINGS:
+            2. **JUROS REMUNERATÓRIOS** – indexador **principal** que corrige os
+            **juros** (DI, CDI, taxa prefixada, etc.) 
+            VALOR UNICO: EXEMPLO: "DI+" ou "DI" ou "IPCA" ou "IPCA+" ou "CDI" ou "CDI+" ou "SELIC" ou "SELIC+", etc.
+
+            3. **SPREAD FIXO** – percentual adicional **sobre** o indexador principal  
+            [“+0,30 %”, “acréscimo de 2 % a.a.”, “spread”].
+
+            4. **BASE DE CÁLCULO** – metodologia usada nas fórmulas de juros  
+            [“252 dias úteis”, “365/365”, “base ACT/360”].
+
+            5. **DATA EMISSÃO** – data(s) a partir da qual o título passa a vigorar  
+            [“Data de Emissão”, “Data de Colocação”; se houver séries, todas elas].
+
+            6. **DATA VENCIMENTO** – data(s) final(is) da obrigação correspondente  
+            [“Data de Vencimento”, “Vencimento Final”; manter mesma ordem de
+            emissão].
+
+            7. **VALOR NOMINAL UNITÁRIO** – valor de face por título/cota  
+            [“Valor Nominal Unitário”, “VNU”, “Valor de Face”].
+
+            8. **FLUXOS DE PAGAMENTO DE AMORTIZAÇÃO E JUROS** – **todas** as datas
+            que aparecem no cronograma / anexo de pagamentos  
+            [“Cronograma de Pagamento”, “Anexo XI”, “Fluxo de Caixa”].
+            → Devolva **todas** em uma única string, separadas por vírgulas,
+            no formato DD/MM/AAAA.
+
+            9. **FLUXOS PERCENTUAIS DE AMORTIZAÇÃO E JUROS** – percentuais que
+            aparecem na mesma tabela do item 8, na **mesma ordem** das datas  
+            [colunas “% Amortização”, “Taxa de Amort.”].
+            → Use vírgula como separador e vírgula decimal (ex.: 0,0000 %).
+
+            FORMATO DE RESPOSTA – preencha os valores e retorne somente o JSON:
             {{
-                "atualizacao_monetaria": "valor ou NÃO ENCONTRADO",
-                "juros_remuneratorios": "valor ou NÃO ENCONTRADO", 
-                "spread_fixo": "valor ou NÃO ENCONTRADO",
-                "base_calculo": "valor ou NÃO ENCONTRADO",
-                "data_emissao": "valor ou NÃO ENCONTRADO",
-                "data_vencimento": "valor ou NÃO ENCONTRADO",
-                "valor_nominal_unitario": "valor ou NÃO ENCONTRADO",
-                "fluxos_pagamento": "valor ou NÃO ENCONTRADO",
-                "fluxos_percentuais": "valor ou NÃO ENCONTRADO"
+            "atualizacao_monetaria": "",
+            "juros_remuneratorios": "",
+            "spread_fixo": "",
+            "base_calculo": "",
+            "data_emissao": "",
+            "data_vencimento": "",
+            "valor_nominal_unitario": "",
+            "fluxos_pagamento": "",
+            "fluxos_percentuais": ""
             }}
             """
             
@@ -299,3 +331,236 @@ class DocumentEntityExtractor:
             token_summary=self.token_counter.get_summary(),
             error_message="Nenhum chunk relevante encontrado no documento"
         )
+        
+    def create_tabela_faas(self, contract_entities: ContractEntity, filename: str) -> List[Dict[str, Any]]:
+        """
+        Cada row é uma data, tendo Inicio e Vencimento.
+        Inicio / Vencimento / Valor nominal / % Amortização / Index / Spread Fixo
+        """
+        tabela_faas = []
+        
+        try:
+            logger.info(f"DEBUG: Iniciando criação de tabela FAAS para {filename}")
+            logger.info(f"DEBUG: fluxos_pagamento existe: {contract_entities.fluxos_pagamento is not None}")
+            if contract_entities.fluxos_pagamento:
+                logger.info(f"DEBUG: fluxos_pagamento valor: '{contract_entities.fluxos_pagamento.value}'")
+            
+            logger.info(f"DEBUG: fluxos_percentuais existe: {contract_entities.fluxos_percentuais is not None}")
+            if contract_entities.fluxos_percentuais:
+                logger.info(f"DEBUG: fluxos_percentuais valor: '{contract_entities.fluxos_percentuais.value}'")
+            
+            fluxos_pagamento = self._extract_dates_from_fluxos(contract_entities.fluxos_pagamento)
+            fluxos_percentuais = self._extract_percentages_from_fluxos(contract_entities.fluxos_percentuais)
+            
+            logger.info(f"DEBUG: fluxos_pagamento extraídos: {fluxos_pagamento}")
+            logger.info(f"DEBUG: fluxos_percentuais extraídos: {fluxos_percentuais}")
+            
+            valor_nominal = self._get_entity_value(contract_entities.valor_nominal_unitario, "")
+            index_info = self._get_entity_value(contract_entities.juros_remuneratorios, "")
+
+            
+            index_completo = self._combine_index_info(index_info)
+            
+            if not fluxos_pagamento:
+                logger.info("DEBUG: Nenhum fluxo de pagamento encontrado, criando linha básica")
+                data_inicio = self._get_first_emission_date(contract_entities.data_emissao)
+                data_vencimento = self._get_last_maturity_date(contract_entities.data_vencimento)
+                
+                if data_inicio or data_vencimento:
+                    linha_faas = {
+                        "Código": filename,
+                        "Início": data_inicio,
+                        "Vencimento": data_vencimento,
+                        "Valor Nominal": valor_nominal,
+                        "Valor Atualizado": "",
+                        "% Amort": "100,00%",  # Assumindo amortização total no vencimento
+                        "Amort. Nominal": "",
+                        "Amort. Atual.": "",
+                        "Amort. extra.": "",
+                        "Remuneração": index_completo,
+                        "D": ""
+                    }
+                    tabela_faas.append(linha_faas)
+                    logger.info("DEBUG: Linha básica criada com sucesso")
+            else:
+                logger.info(f"DEBUG: Criando {len(fluxos_pagamento)} linhas a partir dos fluxos")
+                for i, data_pagamento in enumerate(fluxos_pagamento):
+                    percentual_amortizacao = fluxos_percentuais[i] if i < len(fluxos_percentuais) else ""
+                    
+                    if i == 0:
+                        data_inicio = self._get_first_emission_date(contract_entities.data_emissao)
+                    else:
+                        data_inicio = fluxos_pagamento[i-1]
+                    
+                    linha_faas = {
+                        "Código": filename,
+                        "Início": data_inicio,
+                        "Vencimento": data_pagamento,
+                        "Valor Nominal": valor_nominal,
+                        "Valor Atualizado": "",
+                        "% Amort": percentual_amortizacao,
+                        "Amort. Nominal": "",
+                        "Amort. Atual.": "",
+                        "Amort. extra.": "",
+                        "Remuneração": index_completo,
+                        "D": ""
+                    }
+                    
+                    tabela_faas.append(linha_faas)
+            
+            logger.info(f"Tabela FAAS criada com {len(tabela_faas)} linhas para o arquivo {filename}")
+            if tabela_faas:
+                logger.info(f"Primeira linha da tabela FAAS: {tabela_faas[0]}")
+            return tabela_faas
+            
+        except Exception as e:
+            logger.error(f"Erro ao criar tabela FAAS para {filename}: {e}")
+            import traceback
+            logger.error(f"Traceback completo: {traceback.format_exc()}")
+            return []
+
+    def create_row_faas_resumo(self, contract_entities: ContractEntity, filename: str) -> Dict[str, Any]:
+        """
+        Cada row é um contrato, sendo o inicio a primeira data de emissao, e o vencimento a ultima data de vencimento.
+        Nome do arquivo /Inicio / Vencimento / % Amortização / Valor nominal / Index / Spread Fixo
+        """
+        try:
+            data_inicio = self._get_first_emission_date(contract_entities.data_emissao)
+            data_vencimento = self._get_last_maturity_date(contract_entities.data_vencimento)
+            
+            index_info = self._get_entity_value(contract_entities.juros_remuneratorios, "")
+            atualizacao_monetaria = self._get_entity_value(contract_entities.atualizacao_monetaria, "")
+            
+            index_completo = self._combine_index_info(index_info)
+            
+            linha_resumo = {
+                "Nome do Arquivo": filename,
+                "Fundo": "Agente",
+                "Link A": "",
+                "Index": index_completo,
+                "Aplicação": "",
+                "Emissão": data_inicio,
+                "Vencimento": data_vencimento,
+                "Quantidade": "",
+                "PU Mercado": "",
+                "PU Custo": "",
+                "Saldo": ""
+            }
+            
+            logger.info(f"Linha de resumo FAAS criada para o arquivo {filename}")
+            logger.info(f"Linha de resumo FAAS: {linha_resumo}")
+            return linha_resumo
+            
+        except Exception as e:
+            logger.error(f"Erro ao criar linha de resumo FAAS para {filename}: {e}")
+            return {}
+
+    def _extract_dates_from_fluxos(self, fluxos_entity: Optional[ExtractedEntity]) -> List[str]:
+        """Extrai lista de datas dos fluxos de pagamento"""
+        logger.info("DEBUG: _extract_dates_from_fluxos chamado")
+        if not fluxos_entity or not fluxos_entity.value:
+            logger.info("DEBUG: Nenhum fluxo de pagamento encontrado ou valor vazio")
+            return []
+        
+        logger.info(f"DEBUG: Valor dos fluxos de pagamento: '{fluxos_entity.value}'")
+        
+        date_pattern = r'\d{1,2}/\d{1,2}/\d{2,4}'
+        dates = re.findall(date_pattern, fluxos_entity.value)
+        
+        logger.info(f"DEBUG: Datas encontradas com regex: {dates}")
+        
+        if not dates:
+            logger.info("DEBUG: Nenhuma data encontrada com regex, tentando extração flexível")
+            parts = fluxos_entity.value.split(',')
+            for part in parts:
+                part = part.strip()
+                flexible_pattern = r'\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}'
+                found_dates = re.findall(flexible_pattern, part)
+                if found_dates:
+                    dates.extend(found_dates)
+        
+            logger.info(f"DEBUG: Datas encontradas com extração flexível: {dates}")
+        
+        return dates
+
+    def _extract_percentages_from_fluxos(self, fluxos_entity: Optional[ExtractedEntity]) -> List[str]:
+        """Extrai lista de percentuais dos fluxos percentuais"""
+        if not fluxos_entity or not fluxos_entity.value:
+            return []
+        
+        percentages = [p.strip() for p in fluxos_entity.value.split(',')]
+        
+        return percentages
+
+    def _get_entity_value(self, entity: Optional[ExtractedEntity], default: str = "") -> str:
+        """Extrai valor de uma entidade ou retorna default"""
+        if entity and entity.value:
+            return entity.value
+        return default
+
+    def _get_first_emission_date(self, data_emissao_entity: Optional[ExtractedEntity]) -> str:
+        """Extrai a primeira data de emissão"""
+        if not data_emissao_entity or not data_emissao_entity.value:
+            return ""
+        
+        dates = data_emissao_entity.value.split(',')
+        first_date = dates[0].strip()
+        
+        return self._normalize_date_format(first_date)
+
+    def _get_last_maturity_date(self, data_vencimento_entity: Optional[ExtractedEntity]) -> str:
+        """Extrai a última data de vencimento"""
+        if not data_vencimento_entity or not data_vencimento_entity.value:
+            return ""
+        
+        dates = data_vencimento_entity.value.split(',')
+        last_date = dates[-1].strip()
+        
+        return self._normalize_date_format(last_date)
+
+    def _normalize_date_format(self, date_str: str) -> str:
+        """Normaliza formato de data para DD/MM/YYYY"""
+        if not date_str:
+            return ""
+        
+        if re.match(r'\d{1,2}/\d{1,2}/\d{4}', date_str):
+            return date_str
+        
+        months = {
+            'janeiro': '01', 'fevereiro': '02', 'março': '03', 'abril': '04',
+            'maio': '05', 'junho': '06', 'julho': '07', 'agosto': '08',
+            'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12'
+        }
+        
+        for month_name, month_num in months.items():
+            if month_name in date_str.lower():
+                parts = date_str.split()
+                if len(parts) >= 3:
+                    day = parts[0].strip()
+                    year = parts[-1].strip()
+                    return f"{day.zfill(2)}/{month_num}/{year}"
+        
+        return date_str
+
+    def _combine_index_info(self, index_info: str) -> str:
+        """Combina informações de index e atualização monetária"""
+        return index_info
+
+    def _calculate_total_amortization(self, fluxos_percentuais_entity: Optional[ExtractedEntity]) -> str:
+        """Calcula o total de amortização somando todos os percentuais"""
+        if not fluxos_percentuais_entity or not fluxos_percentuais_entity.value:
+            return "0,00%"
+        
+        try:
+            percentages = fluxos_percentuais_entity.value.split(',')
+            total = 0.0
+            
+            for perc in percentages:
+                clean_perc = perc.strip().replace('%', '').replace(',', '.')
+                if clean_perc:
+                    total += float(clean_perc)
+            
+            return f"{total:.2f}%".replace('.', ',')
+        
+        except (ValueError, AttributeError):
+            return "0,00%"

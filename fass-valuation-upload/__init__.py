@@ -3,10 +3,85 @@ import json
 import logging
 import time
 import numpy as np
+import os, requests, urllib.parse
 from .services.upload_file_service import UploadFileService
 from .services.extract import DocumentEntityExtractor
 from .models.response_models import ErrorResponse
 from .models.entites_models import ExtractionResponse
+import re
+
+########## Daverse ##########
+
+# constantes corrigidas
+FILE_SET   = "new_arquivoses"
+PROJ_SET   = "new_valuation_projetoses"
+ID_ATTR    = "new_valuation_projetosid"
+NAME_ATTR  = "new_name"
+LOOKUP_FK  = "_new_projeto_value"
+
+# atributos realmente existentes em Arquivos
+FILE_ATTR      = "new_file"        # conteúdo binário
+FILE_NAME_ATTR = "new_file_name"   # nome legível
+GUID_RE    = re.compile(r"^[0-9a-fA-F\\-]{36}$")
+
+def get_token():
+    url = f"https://login.microsoftonline.com/{os.getenv('DATAVERSE_TENANT_ID')}/oauth2/v2.0/token"
+    body = {
+        "client_id":     os.getenv("CLIENT_ID"),
+        "client_secret": os.getenv("CLIENT_SECRET"),
+        "grant_type":    "client_credentials",
+        "scope":         os.getenv("SCOPE")
+    }
+    r = requests.post(url, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    r.raise_for_status()
+    print(f"Token -- {r.json()}")
+    return r.json()["access_token"]
+
+def _project_guid_from_name(token: str, name: str) -> str | None:
+    sanitized = name.replace("'", "''")
+    params = {
+        "$select": ID_ATTR,
+        "$filter": f"{NAME_ATTR} eq '{sanitized}'"
+    }
+    r = requests.get(
+        BASE_URL + PROJ_SET,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        params=params,
+    )
+    print(f"Request URL: {BASE_URL + PROJ_SET}, Params: {params}")
+    r.raise_for_status()
+    rows = r.json().get("value", [])
+    return rows[0][ID_ATTR] if rows else None
+
+def list_files_by_project(key: str) -> list[dict]:
+    token = get_token()
+    guid  = key if GUID_RE.match(key) else _project_guid_from_name(token, key)
+    if not guid:
+        raise ValueError(f"Projeto '{key}' não encontrado")
+
+    params = {
+        "$select": "new_name,new_arquivo",
+        "$filter": f"{LOOKUP_FK} eq {guid}",
+        "$top": 100
+    }
+    r = requests.get(
+        BASE_URL + FILE_SET,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        params=params,
+    )
+    r.raise_for_status()
+    return r.json()["value"]
+
+def download_file(row_id: str, target_path: str):
+    token = get_token()
+    base  = os.getenv("BASE_URL")
+    blob  = f"{base}valuation_arquivoses({row_id})/valuation_arquivo?$value"
+    r = requests.get(blob, headers={"Authorization": f"Bearer {token}"})
+    r.raise_for_status()
+    with open(target_path, "wb") as f:
+        f.write(r.content)
+
+########## Daverse ##########
 
 class CustomJSONEncoder(json.JSONEncoder):
     """Encoder JSON personalizado para lidar com tipos numpy e float32"""
@@ -30,7 +105,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     
     try:
         if req.method == "GET":
-            return _handle_info_request()
+            project_guid = req.params.get('project_guid')
+            if project_guid:
+                return _handle_list_files_request(req)
+            else:
+                return _handle_info_request()
         elif req.method == "POST":
             return _handle_file_upload_and_extraction(req)
         else:
@@ -39,6 +118,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except Exception as e:
         logging.error(f"Erro na função: {str(e)}")
         return _create_error_response(f"Erro interno: {str(e)}", 500)
+
+def _handle_list_files_request(req: func.HttpRequest) -> func.HttpResponse:
+    """Lida com a requisição para listar arquivos de um projeto no Dataverse."""
+    project_guid = req.params.get('project_guid')
+    logging.info(f"Buscando arquivos para o projeto GUID: {project_guid}")
+    
+    try:
+        files = list_files_by_project(project_guid)
+        return func.HttpResponse(
+            safe_json_dumps(files),
+            mimetype="application/json",
+            status_code=200
+        )
+    except Exception as e:
+        logging.error(f"Erro ao listar arquivos do Dataverse: {str(e)}")
+        return _create_error_response(f"Erro ao comunicar com o Dataverse: {str(e)}", 500)
 
 def _handle_info_request() -> func.HttpResponse:
     info = {

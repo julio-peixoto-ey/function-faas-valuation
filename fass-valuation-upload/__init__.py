@@ -12,16 +12,14 @@ import re
 
 ########## Daverse ##########
 
-# constantes corrigidas
-FILE_SET   = "new_arquivoses"
-PROJ_SET   = "new_valuation_projetoses"
-ID_ATTR    = "new_valuation_projetosid"
-NAME_ATTR  = "new_name"
+FILE_SET   = "new_arquivoses" 
+PROJ_SET   = "new_valuation_projetoses" 
+ID_ATTR    = "new_valuation_projetosid" 
+NAME_ATTR  = "new_name" 
 LOOKUP_FK  = "_new_projeto_value"
-
-# atributos realmente existentes em Arquivos
-FILE_ATTR      = "new_file"        # conteúdo binário
-FILE_NAME_ATTR = "new_file_name"   # nome legível
+BASE_URL = os.getenv("BASE_URL")
+FILE_ATTR      = "new_file"        
+FILE_NAME_ATTR = "new_file_name"   
 GUID_RE    = re.compile(r"^[0-9a-fA-F\\-]{36}$")
 
 def get_token():

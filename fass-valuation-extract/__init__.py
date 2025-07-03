@@ -455,6 +455,13 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
             "total_contratos": len(resumo_faas),
         }
 
+        try:
+            from .write_json import save_json
+            json_file_path = save_json(response_data)
+            response_data["json_file_path"] = json_file_path
+        except Exception:
+            pass
+
         return func.HttpResponse(
             safe_json_dumps(response_data), mimetype="application/json", status_code=200
         )

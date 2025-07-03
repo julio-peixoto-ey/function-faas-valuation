@@ -10,7 +10,7 @@
                 "get",
                 "post"
             ],
-            "route": "v1/contrato/upload"
+            "route": "v1/valuation/get-binaries"
         },
         {
             "type": "http",

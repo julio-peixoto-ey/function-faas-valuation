@@ -30,24 +30,28 @@ class UploadFileService:
 
     def process_file_upload(self) -> BulkFileUploadResponse:
         files_data = self._extract_files_from_request()
-        
+
         if not files_data:
             raise ValueError("Nenhum arquivo foi enviado")
 
         processed_files = []
         all_filenames = []
-        
+
         for file_content, filename in files_data:
             if not self.is_supported_file(filename):
-                raise ValueError(f"Arquivo {filename}: Apenas arquivos PDF são suportados")
-            
-            logging.info(f"Processando arquivo: {filename}, tamanho: {len(file_content)} bytes")
-            
+                raise ValueError(
+                    f"Arquivo {filename}: Apenas arquivos PDF são suportados"
+                )
+
+            logging.info(
+                f"Processando arquivo: {filename}, tamanho: {len(file_content)} bytes"
+            )
+
             try:
                 file_response = self._process_single_file(file_content, filename)
                 processed_files.append(file_response)
                 all_filenames.append(filename)
-                
+
             except Exception as e:
                 logging.error(f"Erro ao processar {filename}: {str(e)}")
                 error_response = FileUploadResponse(
@@ -60,20 +64,19 @@ class UploadFileService:
                     processing_time_ms=0,
                     token_summary=self.token_counter.get_summary(),
                     documents=[],
-                    message=f"Erro ao processar arquivo: {str(e)}"
+                    message=f"Erro ao processar arquivo: {str(e)}",
                 )
                 processed_files.append(error_response)
 
         success = any(file_resp.success for file_resp in processed_files)
 
-        response = BulkFileUploadResponse(
-            success=success,
-            files=processed_files
-        )
+        response = BulkFileUploadResponse(success=success, files=processed_files)
 
         return response
 
-    def _process_single_file(self, file_content: bytes, filename: str) -> FileUploadResponse:
+    def _process_single_file(
+        self, file_content: bytes, filename: str
+    ) -> FileUploadResponse:
         documents = self.extract_text_from_pdf(file_content, filename)
         all_texts = [doc.page_content for doc in documents]
         all_chunks = self.split_pages(all_texts)
@@ -82,12 +85,14 @@ class UploadFileService:
 
         chunk_data = []
         for idx, chunk in enumerate(all_chunks):
-            chunk_data.append({
-                "chunk_id": idx + 1,
-                "content": base64.b64encode(chunk.encode('utf-8')).decode('utf-8'),
-                "tokens": len(chunk.split()),
-                "page": self._get_chunk_page(idx, len(documents)),
-            })
+            chunk_data.append(
+                {
+                    "chunk_id": idx + 1,
+                    "content": base64.b64encode(chunk.encode("utf-8")).decode("utf-8"),
+                    "tokens": len(chunk.split()),
+                    "page": self._get_chunk_page(idx, len(documents)),
+                }
+            )
 
         response = FileUploadResponse(
             success=True,
@@ -109,7 +114,9 @@ class UploadFileService:
         page = (chunk_index % total_pages) + 1
         return page
 
-    def extract_text_from_pdf(self, file_content: bytes, filename: str) -> List[DocumentModel]:
+    def extract_text_from_pdf(
+        self, file_content: bytes, filename: str
+    ) -> List[DocumentModel]:
         documents = []
         temp_path = None
 
@@ -138,7 +145,9 @@ class UploadFileService:
                     documents.append(document)
 
             doc.close()
-            logger.info(f"Extração concluída: {len(documents)} páginas com texto de {filename}")
+            logger.info(
+                f"Extração concluída: {len(documents)} páginas com texto de {filename}"
+            )
 
         except Exception as e:
             logger.error(f"Erro ao extrair texto do PDF {filename}: {str(e)}")
@@ -164,7 +173,7 @@ class UploadFileService:
 
     def _extract_files_from_request(self) -> List[tuple[bytes, str]]:
         files_data = []
-        
+
         files = self.req.files
         if files:
             for key, file_item in files.items():
@@ -183,13 +192,13 @@ class UploadFileService:
                             filename = file_info.get("filename", "document.pdf")
                             files_data.append((file_content, filename))
                     return files_data
-                
+
                 elif "file_content" in body_json:
                     file_content = base64.b64decode(body_json["file_content"])
                     filename = body_json.get("filename", "document.pdf")
                     files_data.append((file_content, filename))
                     return files_data
-                    
+
         except Exception as e:
             logging.error(f"Erro ao processar JSON: {str(e)}")
 
@@ -198,4 +207,3 @@ class UploadFileService:
     def split_pages(self, pages: list[str]) -> list[str]:
         joined = "\n".join(pages)
         return self.splitter.split_text(joined)
-    

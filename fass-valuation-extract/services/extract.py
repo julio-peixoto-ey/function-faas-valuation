@@ -1,12 +1,12 @@
-from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
+from langchain_openai import AzureOpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 import logging as logger
 import os
 import time
 import base64
-import json
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 from ..models.entites_models import (
     ExtractedEntity,
     ContractEntity,
@@ -14,6 +14,55 @@ from ..models.entites_models import (
 )
 from ..utils.token_counter import TokenCounter
 import re
+import instructor
+from openai import AzureOpenAI
+import json
+
+class ContractEntitiesResponse(BaseModel):
+
+    atualizacao_monetaria: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Índice que corrige o principal (IPCA, IGP-M, SELIC, etc.)",
+    )
+
+    juros_remuneratorios: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Indexador principal dos juros (DI+, CDI+, IPCA+, etc.)",
+    )
+
+    spread_fixo: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Percentual adicional sobre o indexador principal",
+    )
+
+    base_calculo: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Metodologia de cálculo de juros (252, 365, ACT/360)",
+    )
+
+    data_emissao: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Data(s) de emissão do título no formato DD/MM/AAAA",
+    )
+
+    data_vencimento: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Data(s) de vencimento no formato DD/MM/AAAA",
+    )
+
+    valor_nominal_unitario: str = Field(
+        default="NÃO ENCONTRADO", description="Valor de face por título/cota"
+    )
+
+    fluxos_pagamento: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Datas do cronograma de pagamentos separadas por vírgula",
+    )
+
+    fluxos_percentuais: str = Field(
+        default="NÃO ENCONTRADO",
+        description="Percentuais de amortização separados por vírgula",
+    )
 
 
 def get_required_env_var(var_name: str, default_value: str = None) -> str:
@@ -42,15 +91,19 @@ class DocumentEntityExtractor:
 
     def __init__(self):
         self.token_counter = TokenCounter()
-        self.llm = AzureChatOpenAI(
+
+        # Substitua a configuração do LLM atual por esta:
+        base_client = AzureOpenAI(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
             azure_deployment=AZURE_DEPLOYMENT_NAME,
             api_version=AZURE_OPENAI_API_VERSION,
-            temperature=0.1,
-            max_tokens=4000,
         )
 
+        # Aplique o patch do Instructor
+        self.llm = instructor.from_openai(base_client)
+
+        # Mantenha os embeddings como estão
         self.embeddings = AzureOpenAIEmbeddings(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
@@ -93,7 +146,7 @@ class DocumentEntityExtractor:
     def extract_all_entities(
         self, document_chunks: List[Dict[str, Any]], filename: str
     ) -> DocumentExtractionResult:
-        """Extrai todas as entidades em uma única chamada otimizada"""
+        """Extrai entidades usando Instructor para garantir JSON válido"""
         start_time = time.time()
 
         try:
@@ -130,7 +183,6 @@ class DocumentEntityExtractor:
 
             ────────────────────────── CONTEXTO ──────────────────────────
             {full_context}
-            ───────────────────────────────────────────────────────────────
 
             REGRAS OBRIGATÓRIAS
             1. Copie o conteúdo **exatamente como está no contrato** – não traduza
@@ -145,130 +197,74 @@ class DocumentEntityExtractor:
             (***guias de busca*** entre colchetes ajudam a localizar no contrato)
 
             1. **ATUALIZAÇÃO MONETÁRIA** – índice que corrige o **principal**  
-            [palavras-chave: “atualização monetária”, “índice de correção”,
-            “IPCA”, “IGP-M”, “SELIC”, “não haverá atualização”].
+            [palavras-chave: "atualização monetária", "índice de correção",
+            "IPCA", "IGP-M", "SELIC", "não haverá atualização"].
 
             2. **JUROS REMUNERATÓRIOS** – indexador **principal** que corrige os
             **juros** (DI, CDI, taxa prefixada, etc.) 
             VALOR UNICO: EXEMPLO: "DI+" ou "DI" ou "IPCA" ou "IPCA+" ou "CDI" ou "CDI+" ou "SELIC" ou "SELIC+", etc.
 
             3. **SPREAD FIXO** – percentual adicional **sobre** o indexador principal  
-            [“+0,30 %”, “acréscimo de 2 % a.a.”, “spread”].
+            ["+0,30 %", "acréscimo de 2 % a.a.", "spread"].
 
             4. **BASE DE CÁLCULO** – metodologia usada nas fórmulas de juros  
-            [“252 dias úteis”, “365/365”, “base ACT/360”].
+            ["252 dias úteis", "365/365", "base ACT/360"].
 
             5. **DATA EMISSÃO** – data(s) a partir da qual o título passa a vigorar  
-            [“Data de Emissão”, “Data de Colocação”; se houver séries, todas elas].
+            ["Data de Emissão", "Data de Colocação"; se houver séries, todas elas].
 
             6. **DATA VENCIMENTO** – data(s) final(is) da obrigação correspondente  
-            [“Data de Vencimento”, “Vencimento Final”; manter mesma ordem de
+            ["Data de Vencimento", "Vencimento Final"; manter mesma ordem de
             emissão].
 
             7. **VALOR NOMINAL UNITÁRIO** – valor de face por título/cota  
-            [“Valor Nominal Unitário”, “VNU”, “Valor de Face”].
+            ["Valor Nominal Unitário", "VNU", "Valor de Face"].
 
             8. **FLUXOS DE PAGAMENTO DE AMORTIZAÇÃO E JUROS** – **todas** as datas
             que aparecem no cronograma / anexo de pagamentos  
-            [“Cronograma de Pagamento”, “Anexo XI”, “Fluxo de Caixa”].
+            ["Cronograma de Pagamento", "Anexo XI", "Fluxo de Caixa"].
             → Devolva **todas** em uma única string, separadas por vírgulas,
             no formato DD/MM/AAAA.
 
             9. **FLUXOS PERCENTUAIS DE AMORTIZAÇÃO E JUROS** – percentuais que
             aparecem na mesma tabela do item 8, na **mesma ordem** das datas  
-            [colunas “% Amortização”, “Taxa de Amort.”].
+            [colunas "% Amortização", "Taxa de Amort."].
             → Use vírgula como separador e vírgula decimal (ex.: 0,0000 %).
-
-            FORMATO DE RESPOSTA – preencha os valores e retorne somente o JSON:
-            {{
-            "atualizacao_monetaria": "",
-            "juros_remuneratorios": "",
-            "spread_fixo": "",
-            "base_calculo": "",
-            "data_emissao": "",
-            "data_vencimento": "",
-            "valor_nominal_unitario": "",
-            "fluxos_pagamento": "",
-            "fluxos_percentuais": ""
-            }}
             """
 
-            response = self.llm.invoke(prompt)
-            response_content = (
-                response.content if hasattr(response, "content") else str(response)
+            response = self.llm.chat.completions.create(
+                model=AZURE_DEPLOYMENT_NAME,
+                response_model=ContractEntitiesResponse,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+                max_retries=3,
             )
-
-            input_tokens = self.token_counter.count_tokens(prompt)
-            output_tokens = self.token_counter.count_tokens(response_content)
-            self.token_counter.usage.input_tokens += input_tokens
-            self.token_counter.usage.output_tokens += output_tokens
-            self.token_counter.usage.api_calls += 1
-
-            try:
-                json_start = response_content.find("{")
-                json_end = response_content.rfind("}") + 1
-                if json_start != -1 and json_end != 0:
-                    json_content = response_content[json_start:json_end]
-                else:
-                    json_content = response_content
-
-                entities_data = json.loads(json_content)
-                logger.info(
-                    f"JSON parseado com sucesso: {len(entities_data)} entidades"
-                )
-
-                for key, value in entities_data.items():
-                    logger.info(f"Entidade '{key}': tipo={type(value)}, valor={value}")
-
-            except json.JSONDecodeError as e:
-                logger.warning(f"Falha no parsing JSON: {e}")
-                logger.warning(f"Conteúdo recebido: {response_content[:500]}...")
-                return self._extract_entities_fallback(
-                    vector_store, filename, start_time, response_content
-                )
 
             contract_entities = ContractEntity()
             entities_found = 0
 
-            for entity_name, value in entities_data.items():
-                if isinstance(value, list):
-                    processed_value = ", ".join(str(item) for item in value if item)
-                elif value is None:
-                    processed_value = ""
-                else:
-                    processed_value = str(value)
-
-                if (
-                    processed_value
-                    and processed_value.strip()
-                    and processed_value.strip().upper() != "NÃO ENCONTRADO"
-                ):
-                    confidence = self._calculate_confidence_from_context(
-                        processed_value, full_context
-                    )
-
+            for field_name, value in response.model_dump().items():
+                if value and value.strip() and value.upper() != "NÃO ENCONTRADO":
+                    confidence = self._calculate_confidence_from_context(value, full_context)
+                    
                     entity = ExtractedEntity(
-                        entity_type=entity_name,
-                        value=processed_value.strip(),
+                        entity_type=field_name,
+                        value=value.strip(),
                         confidence=confidence,
                         page_references=sorted(list(all_page_refs)),
                         context=(
-                            full_context[:500] + "..."
-                            if len(full_context) > 500
-                            else full_context
+                            full_context[:500] + "..." if len(full_context) > 500 else full_context
                         ),
                     )
-                    setattr(contract_entities, entity_name, entity)
+                    setattr(contract_entities, field_name, entity)
                     entities_found += 1
-                    logger.info(
-                        f"Entidade '{entity_name}' encontrada: {processed_value.strip()[:50]}..."
-                    )
+                    logger.info(f"Entidade '{field_name}' encontrada: {value.strip()[:50]}...")
 
             processing_time = int((time.time() - start_time) * 1000)
-            del vector_store
 
             logger.info(
-                f"Extração otimizada concluída: {entities_found}/9 entidades encontradas em {processing_time}ms com 1 chamada à API"
+                f"Extração com Instructor: {entities_found}/9 entidades - JSON sempre válido!"
             )
 
             return DocumentExtractionResult(
@@ -280,73 +276,8 @@ class DocumentEntityExtractor:
             )
 
         except Exception as e:
-            processing_time = int((time.time() - start_time) * 1000)
-            logger.error(f"Erro na extração otimizada: {e}")
-
-            return DocumentExtractionResult(
-                filename=filename,
-                success=False,
-                contract_entities=ContractEntity(),
-                processing_time_ms=processing_time,
-                token_summary=self.token_counter.get_summary(),
-                error_message=str(e),
-            )
-
-    def _extract_entities_fallback(
-        self, vector_store, filename, start_time, response_content
-    ):
-        """Fallback quando JSON parsing falha - tenta extrair informações do texto"""
-        logger.info("Executando fallback para parsing manual")
-
-        contract_entities = ContractEntity()
-
-        entity_patterns = {
-            "atualizacao_monetaria": [
-                "IPCA",
-                "IGPM",
-                "SELIC",
-                "correção",
-                "atualização",
-            ],
-            "juros_remuneratorios": ["DI", "CDI", "pré-fixado", "fixo", "%"],
-            "spread_fixo": ["%", "spread", "sobretaxa", "a.a.", "ao ano"],
-            "base_calculo": ["252", "365", "dias", "úteis", "corridos"],
-            "data_emissao": ["/", "-", "emissão", "início"],
-            "data_vencimento": ["/", "-", "vencimento", "término"],
-            "valor_nominal_unitario": ["R$", "valor", "nominal", "unitário"],
-            "fluxos_pagamento": ["/", "-", "pagamento", "cronograma"],
-            "fluxos_percentuais": ["%", "amortização", "parcela"],
-        }
-
-        for entity_name, patterns in entity_patterns.items():
-            for pattern in patterns:
-                if (
-                    pattern.lower() in response_content.lower()
-                    and "NÃO ENCONTRADO" not in response_content
-                ):
-                    lines = response_content.split("\n")
-                    for line in lines:
-                        if pattern.lower() in line.lower() and len(line.strip()) > 5:
-                            entity = ExtractedEntity(
-                                entity_type=entity_name,
-                                value=line.strip()[:100],
-                                confidence=0.5,
-                                page_references=[],
-                                context="Extraído via fallback",
-                            )
-                            setattr(contract_entities, entity_name, entity)
-                            break
-                    break
-
-        processing_time = int((time.time() - start_time) * 1000)
-
-        return DocumentExtractionResult(
-            filename=filename,
-            success=True,
-            contract_entities=contract_entities,
-            processing_time_ms=processing_time,
-            token_summary=self.token_counter.get_summary(),
-        )
+            logger.error(f"Erro na extração com Instructor: {e}")
+            return self._create_empty_result(filename, start_time)
 
     def _calculate_confidence_from_context(self, value: str, context: str) -> float:
         """Calcula confiança baseada na presença do valor no contexto"""

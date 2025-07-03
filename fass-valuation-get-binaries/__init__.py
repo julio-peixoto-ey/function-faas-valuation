@@ -1,6 +1,7 @@
 import re
 import base64
-import os, requests
+import os
+import requests
 import json
 import logging
 import time

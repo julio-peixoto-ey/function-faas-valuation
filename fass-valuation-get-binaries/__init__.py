@@ -21,7 +21,7 @@ FILE_NAME_ATTR = "new_file_name"
 ROW_ID_ATTR = "new_arquivosid"
 
 GUID_RE = re.compile(r"^[0-9a-fA-F\-]{36}$")
-
+FUNCTION_BASE_URL = os.getenv("FUNCTION_BASE_URL")
 
 def get_token():
     url = f"https://login.microsoftonline.com/{os.getenv('DATAVERSE_TENANT_ID')}/oauth2/v2.0/token"
@@ -89,6 +89,35 @@ def get_binary_list(rows: list[dict], token: str) -> list[dict]:
     return binaries
 
 
+def _call_extraction_service(files_b64: list) -> dict:
+    """Chama a função de extração com os arquivos binários"""
+    try:
+        extraction_url = f"{FUNCTION_BASE_URL}/valuation/extract"
+        
+        payload = {
+            "files": [
+                {
+                    "filename": file_data["file_name"],
+                    "file_content": file_data["binary"]
+                }
+                for file_data in files_b64
+            ]
+        }
+        
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        response = requests.post(extraction_url, json=payload, headers=headers, timeout=300)
+        response.raise_for_status()
+        
+        return response.json()
+        
+    except Exception as e:
+        logging.error(f"Erro ao chamar serviço de extração: {e}")
+        raise
+
+
 def _handle_list_files_request(req: func.HttpRequest) -> func.HttpResponse:
     project_key = req.params.get("project_guid")
     logging.info(f"Buscando arquivos para: {project_key}")
@@ -97,14 +126,18 @@ def _handle_list_files_request(req: func.HttpRequest) -> func.HttpResponse:
         rows, token = list_files_by_project(project_key)
         files_b64 = get_binary_list(rows, token)
 
+        logging.info(f"Encontrados {len(files_b64)} arquivos, iniciando extração")
+        
+        extraction_result = _call_extraction_service(files_b64)
+        
         return func.HttpResponse(
-            safe_json_dumps({"files": files_b64, "total": len(files_b64)}),
+            safe_json_dumps(extraction_result),
             mimetype="application/json",
             status_code=200,
         )
     except Exception as exc:
-        logging.error(f"Falha Dataverse: {exc}")
-        return _create_error_response("Erro ao comunicar com o Dataverse", 500)
+        logging.error(f"Falha no processamento: {exc}")
+        return _create_error_response("Erro ao processar arquivos", 500)
 
 
 ########## Daverse ##########
@@ -135,12 +168,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         if req.method == "GET":
-            return _handle_info_request()
-        elif req.method == "POST":
             project_guid = req.params.get("project_guid")
             if not project_guid:
                 return _create_error_response("Project GUID não fornecido", 400)
             return _handle_list_files_request(req)
+        elif req.method == "POST":
+            return _handle_info_request()
         else:
             return _create_error_response("Método não suportado", 405)
 

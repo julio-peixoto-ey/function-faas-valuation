@@ -119,7 +119,7 @@ def _call_extraction_service(files_b64: list) -> dict:
 
 
 def _handle_list_files_request(req: func.HttpRequest) -> func.HttpResponse:
-    project_key = req.params.get("project_guid")
+    project_key = req.params.get("project_name")
     logging.info(f"Buscando arquivos para: {project_key}")
 
     try:
@@ -168,9 +168,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         if req.method == "GET":
-            project_guid = req.params.get("project_guid")
-            if not project_guid:
-                return _create_error_response("Project GUID não fornecido", 400)
+            project_name = req.params.get("project_name")
+            if not project_name:
+                return _create_error_response("Project name não fornecido", 400)
             return _handle_list_files_request(req)
         elif req.method == "POST":
             return _handle_info_request()
@@ -189,7 +189,7 @@ def _handle_info_request() -> func.HttpResponse:
             "get_binaries": "POST /valuation/get-binaries",
             "info": "GET /valuation/get-binaries",
         },
-        "required_params": ["project_guid"],
+        "required_params": ["project_name"],
     }
 
     return func.HttpResponse(

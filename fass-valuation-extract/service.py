@@ -566,10 +566,10 @@ class DocumentEntityExtractor:
 
 
 class UploadFileService:
-    """Serviço responsável pela extração de texto de arquivos PDF"""
+    """Serviço responsável pela extração de texto de arquivos PDF, TXT, DOC e DOCX"""
 
     def __init__(self, req: func.HttpRequest):
-        self.supported_extension = ".pdf"
+        self.supported_extensions = [".pdf", ".txt", ".doc", ".docx"]
         self.token_counter = TokenCounter()
         self.req = req
         self.splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
@@ -590,8 +590,9 @@ class UploadFileService:
 
         for file_content, filename in files_data:
             if not self.is_supported_file(filename):
+                supported_formats = ", ".join(self.supported_extensions)
                 raise ValueError(
-                    f"Arquivo {filename}: Apenas arquivos PDF são suportados"
+                    f"Arquivo {filename}: Apenas arquivos {supported_formats} são suportados"
                 )
 
             logging.info(
@@ -608,7 +609,7 @@ class UploadFileService:
                 error_response = FileUploadResponse(
                     success=False,
                     filename=filename,
-                    file_type="pdf",
+                    file_type=self._get_file_extension(filename).replace(".", ""),
                     documents_count=0,
                     total_characters=0,
                     total_tokens=0,
@@ -628,7 +629,17 @@ class UploadFileService:
     def _process_single_file(
         self, file_content: bytes, filename: str
     ) -> FileUploadResponse:
-        documents = self.extract_text_from_pdf(file_content, filename)
+        file_extension = self._get_file_extension(filename)
+        
+        if file_extension == ".pdf":
+            documents = self.extract_text_from_pdf(file_content, filename)
+        elif file_extension == ".txt":
+            documents = self.extract_text_from_txt(file_content, filename)
+        elif file_extension in [".doc", ".docx"]:
+            documents = self.extract_text_from_docx(file_content, filename)
+        else:
+            raise ValueError(f"Tipo de arquivo não suportado: {file_extension}")
+            
         all_texts = [doc.page_content for doc in documents]
         all_chunks = self.split_pages(all_texts)
         total_tokens = self.token_counter.log_embedding_usage(all_chunks)
@@ -648,7 +659,7 @@ class UploadFileService:
         response = FileUploadResponse(
             success=True,
             filename=filename,
-            file_type="pdf",
+            file_type=file_extension.replace(".", ""),
             documents_count=len(chunk_data),
             total_characters=sum(len(chunk) for chunk in all_chunks),
             total_tokens=total_tokens,
@@ -658,6 +669,106 @@ class UploadFileService:
         )
 
         return response
+
+    def _get_file_extension(self, filename: str) -> str:
+        """Extrai a extensão do arquivo"""
+        return os.path.splitext(filename.lower())[1]
+
+    def extract_text_from_txt(
+        self, file_content: bytes, filename: str
+    ) -> List[DocumentModel]:
+        """Extrai texto de arquivos TXT"""
+        documents = []
+        
+        try:
+            text = None
+            encodings = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+            
+            for encoding in encodings:
+                try:
+                    text = file_content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if text is None:
+                raise Exception("Não foi possível decodificar o arquivo TXT")
+
+            logging.info(f"Processando TXT: {filename}")
+
+            if text.strip():
+                document = DocumentModel(
+                    page_content=text.strip(),
+                    page_number=1,
+                    source=filename,
+                    file_type="txt",
+                    character_count=len(text.strip()),
+                    token_count=self._estimate_tokens(text.strip()),
+                )
+                documents.append(document)
+
+            logging.info(f"Extração TXT concluída: {filename}")
+
+        except Exception as e:
+            logging.error(f"Erro ao extrair texto do TXT {filename}: {str(e)}")
+            raise Exception(f"Falha na extração de texto: {str(e)}")
+
+        if not documents:
+            raise Exception("Nenhum texto foi extraído do arquivo TXT")
+
+        return documents
+
+    def extract_text_from_docx(
+        self, file_content: bytes, filename: str
+    ) -> List[DocumentModel]:
+        """Extrai texto de arquivos DOC e DOCX"""
+        documents = []
+        temp_path = None
+
+        try:
+            from docx import Document as DocxDocument
+            import io
+
+            if filename.lower().endswith('.docx'):
+                doc_stream = io.BytesIO(file_content)
+                doc = DocxDocument(doc_stream)
+                
+                full_text = []
+                for paragraph in doc.paragraphs:
+                    if paragraph.text.strip():
+                        full_text.append(paragraph.text.strip())
+                
+                text = '\n'.join(full_text)
+                
+            else:
+                try:
+                    text = file_content.decode('utf-8', errors='ignore')
+                except:
+                    text = file_content.decode('latin-1', errors='ignore')
+
+            logging.info(f"Processando DOCX/DOC: {filename}")
+
+            if text.strip():
+                document = DocumentModel(
+                    page_content=text.strip(),
+                    page_number=1,
+                    source=filename,
+                    file_type="docx" if filename.lower().endswith('.docx') else "doc",
+                    character_count=len(text.strip()),
+                    token_count=self._estimate_tokens(text.strip()),
+                )
+                documents.append(document)
+
+            logging.info(f"Extração DOCX/DOC concluída: {filename}")
+
+        except Exception as e:
+            logging.error(f"Erro ao extrair texto do DOCX/DOC {filename}: {str(e)}")
+            raise Exception(f"Falha na extração de texto: {str(e)}")
+
+        if not documents:
+            raise Exception("Nenhum texto foi extraído do arquivo DOCX/DOC")
+
+        return documents
 
     def _get_chunk_page(self, chunk_index: int, total_pages: int) -> int:
         if total_pages == 0:
@@ -720,7 +831,8 @@ class UploadFileService:
         return len(text) // 4
 
     def is_supported_file(self, filename: str) -> bool:
-        return filename.lower().endswith(self.supported_extension)
+        file_extension = self._get_file_extension(filename)
+        return file_extension in self.supported_extensions
 
     def _extract_files_from_request(self) -> List[tuple[bytes, str]]:
         files_data = []

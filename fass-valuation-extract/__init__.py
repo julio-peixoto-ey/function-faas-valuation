@@ -38,7 +38,7 @@ class CustomJSONEncoder(json.JSONEncoder):
 def safe_json_dumps(obj, **kwargs):
     """Função auxiliar para serialização JSON segura"""
     kwargs.setdefault("cls", CustomJSONEncoder)
-    kwargs.setdefault("ensure_ascii", False)
+    kwargs.setdefault("ensure_ascii", False)    
     return json.dumps(obj, **kwargs)
 
 
@@ -103,9 +103,10 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
 def _handle_info_request() -> func.HttpResponse:
     info = {
-        "message": "API para extração de entidades de um arquivo",
+        "message": "API para extração de entidades de documentos",
         "status": "healthy",
         "timestamp": time.time(),
+        "supported_formats": ["PDF", "TXT", "DOC", "DOCX"],
         "endpoints": {
             "upload_and_extract": "POST /valuation/extract",
             "health": "GET /valuation/extract",

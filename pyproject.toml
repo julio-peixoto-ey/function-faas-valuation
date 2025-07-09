@@ -16,6 +16,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "instructor>=1.9.0",
     "pydantic>=2.11.6",
+    "easyocr>=1.7.2",
+    "pillow>=11.3.0",
 ]
 
 [dependency-groups]

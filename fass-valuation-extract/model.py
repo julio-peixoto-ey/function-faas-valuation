@@ -10,7 +10,6 @@ class ExtractedEntity:
     entity_type: str
     value: str
     confidence: float
-    page_references: List[int]
     context: Optional[str] = None
 
 
@@ -128,7 +127,6 @@ class ExtractionResponse:
                 result[field_name] = {
                     "value": entity.value,
                     "confidence": entity.confidence,
-                    "page_references": entity.page_references,
                     "context": entity.context,
                 }
             else:

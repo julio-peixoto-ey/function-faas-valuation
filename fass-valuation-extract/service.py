@@ -43,7 +43,6 @@ class DocumentEntityExtractor:
     def __init__(self):
         self.token_counter = TokenCounter()
 
-        # Substitua a configuração do LLM atual por esta:
         base_client = AzureOpenAI(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
@@ -51,10 +50,8 @@ class DocumentEntityExtractor:
             api_version=AZURE_OPENAI_API_VERSION,
         )
 
-        # Aplique o patch do Instructor
         self.llm = instructor.from_openai(base_client)
 
-        # Mantenha os embeddings como estão
         self.embeddings = AzureOpenAIEmbeddings(
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_KEY,
@@ -127,14 +124,16 @@ class DocumentEntityExtractor:
             full_context = "\n\n---\n\n".join(context_parts)
 
             prompt = f"""
+            <role>
             Você é um(a) **analista sênior de contratos financeiros**.  
             Sua tarefa é **LER** o texto abaixo e **DEVOLVER** exatamente **um** objeto
             JSON com os nove campos pedidos, **somente strings** (nunca arrays),
             no formato mostrado depois da lista.
-
-            ────────────────────────── CONTEXTO ──────────────────────────
+            </role>
+            <context>
             {full_context}
-
+            </context>
+            <rules>
             REGRAS OBRIGATÓRIAS
             1. Copie o conteúdo **exatamente como está no contrato** – não traduza
             nem reescreva números, índices ou datas.
@@ -143,7 +142,8 @@ class DocumentEntityExtractor:
             string separada por vírgulas**, mantendo a ordem em que aparecem.
             4. Retorne apenas o JSON válido (sem comentários, sem texto antes ou
             depois).
-
+            </rules>
+            <items>
             ITENS QUE DEVEM SER EXTRAÍDOS  
             (***guias de busca*** entre colchetes ajudam a localizar no contrato)
 
@@ -181,6 +181,7 @@ class DocumentEntityExtractor:
             aparecem na mesma tabela do item 8, na **mesma ordem** das datas  
             [colunas "% Amortização", "Taxa de Amort."].
             → Use vírgula como separador e vírgula decimal (ex.: 0,0000 %).
+            </items>
             """
 
             response = self.llm.chat.completions.create(
@@ -565,7 +566,7 @@ class DocumentEntityExtractor:
             return "0,00%"
 
 
-class UploadFileService:
+class DocumentTextExtractorService:
     """Serviço responsável pela extração de texto de arquivos PDF, TXT, DOC e DOCX"""
 
     def __init__(self, req: func.HttpRequest):
@@ -575,8 +576,8 @@ class UploadFileService:
         self.splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             encoding_name="o200k_base",
             chunk_size=800,
-            chunk_overlap=120,
-            separators=["\n\n", "\n", " ", ""],
+            chunk_overlap=200,
+            separators=["\n\n", "\n"],
         )
 
     def process_file_upload(self) -> BulkFileUploadResponse:
@@ -723,7 +724,6 @@ class UploadFileService:
     ) -> List[DocumentModel]:
         """Extrai texto de arquivos DOC e DOCX"""
         documents = []
-        temp_path = None
 
         try:
             from docx import Document as DocxDocument
@@ -743,7 +743,8 @@ class UploadFileService:
             else:
                 try:
                     text = file_content.decode('utf-8', errors='ignore')
-                except:
+                except Exception as e:
+                    logging.error(f"Erro ao decodificar DOCX/DOC {filename}: {str(e)}")
                     text = file_content.decode('latin-1', errors='ignore')
 
             logging.info(f"Processando DOCX/DOC: {filename}")

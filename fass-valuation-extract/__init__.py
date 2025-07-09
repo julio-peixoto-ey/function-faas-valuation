@@ -12,7 +12,7 @@ from .model import (
     ContractEntity,
 )
 from .utils import TokenCounter
-from .service import DocumentEntityExtractor, UploadFileService
+from .service import DocumentEntityExtractor, DocumentTextExtractorService
 from .model import (
     ExtractionResponse,
     ErrorResponse,
@@ -144,7 +144,7 @@ def _handle_info_request() -> func.HttpResponse:
 def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpResponse:
     upload_start_time = time.time()
 
-    upload_file_service = UploadFileService(req)
+    upload_file_service = DocumentTextExtractorService(req)
 
     try:
         upload_response = upload_file_service.process_file_upload()

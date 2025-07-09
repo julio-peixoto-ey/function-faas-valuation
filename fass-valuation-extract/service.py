@@ -725,7 +725,7 @@ class DocumentTextExtractorService:
         
         try:
             file_size_mb = len(file_content) / (1024 * 1024)
-            logging.info(f"Iniciando extração OCR para {filename} ({file_size_mb:.1f}MB)")
+            logging.info(f"Iniciando OCR: {filename} ({file_size_mb:.1f}MB)")
             
             if file_size_mb > 100:
                 logging.warning(f"Arquivo muito grande ({file_size_mb:.1f}MB), pode haver problemas de memória")
@@ -741,10 +741,10 @@ class DocumentTextExtractorService:
             
             if use_sampling:
                 pages_to_process = self._get_strategic_pages(total_pages, self.MAX_TOTAL_PAGES_OCR)
-                logging.info(f"Documento grande: processando {len(pages_to_process)} páginas estratégicas de {total_pages} total")
+                logging.info(f"Estratégia: {len(pages_to_process)} páginas estratégicas de {total_pages} total")
             else:
                 pages_to_process = list(range(min(self.MAX_TOTAL_PAGES_OCR, total_pages)))
-                logging.info(f"Processando {len(pages_to_process)} páginas de {total_pages} total")
+                logging.info(f"Processando: {len(pages_to_process)} de {total_pages} páginas")
             
             try:
                 reader = self._get_ocr_reader()
@@ -754,15 +754,19 @@ class DocumentTextExtractorService:
                 return self.extract_text_from_pdf_normal(file_content, filename)
             
             total_processed = 0
+            start_time = time.time()
+            
             for batch_start in range(0, len(pages_to_process), self.MAX_PAGES_PER_BATCH):
                 batch_end = min(batch_start + self.MAX_PAGES_PER_BATCH, len(pages_to_process))
                 batch_pages = pages_to_process[batch_start:batch_end]
+                batch_num = batch_start // self.MAX_PAGES_PER_BATCH + 1
+                total_batches = (len(pages_to_process) + self.MAX_PAGES_PER_BATCH - 1) // self.MAX_PAGES_PER_BATCH
                 
-                logging.info(f"Processando lote {batch_start//self.MAX_PAGES_PER_BATCH + 1}: páginas {batch_pages[0]+1}-{batch_pages[-1]+1}")
+                logging.info(f"Lote {batch_num}/{total_batches}: Páginas {batch_pages[0]+1}-{batch_pages[-1]+1}")
                 
                 for page_num in batch_pages:
                     try:
-                        start_time = time.time()
+                        page_start_time = time.time()
                         
                         page = doc.load_page(page_num)
                         
@@ -782,12 +786,12 @@ class DocumentTextExtractorService:
                         try:
                             results = reader.readtext(img_data, detail=0, width_ths=0.7, height_ths=0.7)
                             
-                            processing_time = time.time() - start_time
-                            if processing_time > self.OCR_TIMEOUT_PER_PAGE:
-                                logging.warning(f"Página {page_num + 1} demorou {processing_time:.1f}s")
+                            page_processing_time = time.time() - page_start_time
+                            if page_processing_time > self.OCR_TIMEOUT_PER_PAGE:
+                                logging.warning(f"Página {page_num + 1} demorou {page_processing_time:.1f}s")
                             
                         except Exception as ocr_error:
-                            logging.error(f"Erro no OCR da página {page_num + 1}: {str(ocr_error)}")
+                            logging.error(f"OCR falhou na página {page_num + 1}: {str(ocr_error)}")
                             continue
                         
                         if results:
@@ -807,8 +811,17 @@ class DocumentTextExtractorService:
                                 documents.append(document)
                                 total_processed += 1
                                 
-                                if total_processed % 5 == 0:
-                                    logging.info(f"Processadas {total_processed} páginas...")
+                                if total_processed % 10 == 0 or total_processed % 5 == 0:
+                                    elapsed_time = time.time() - start_time
+                                    avg_time_per_page = elapsed_time / total_processed
+                                    estimated_remaining = avg_time_per_page * (len(pages_to_process) - total_processed)
+                                    
+                                    progress_percent = (total_processed / len(pages_to_process)) * 100
+                                    progress_bar = self._create_progress_bar(progress_percent)
+                                    
+                                    logging.info(f"Progresso: {progress_bar} {total_processed}/{len(pages_to_process)} páginas " +
+                                               f"({progress_percent:.1f}%) - {avg_time_per_page:.1f}s/página - " +
+                                               f"ETA: {estimated_remaining/60:.1f}min")
                     
                     except Exception as e:
                         logging.error(f"Erro na página {page_num + 1}: {str(e)}")
@@ -818,7 +831,12 @@ class DocumentTextExtractorService:
                     time.sleep(0.5)
             
             doc.close()
-            logging.info(f"OCR concluído: {len(documents)} páginas processadas de {filename}")
+            
+            total_time = time.time() - start_time
+            total_chars = sum(len(doc.page_content) for doc in documents)
+            
+            logging.info(f"OCR Completo: {len(documents)} páginas, {total_chars:,} caracteres, " +
+                        f"{total_time/60:.1f}min total")
             
             if not documents:
                 logging.warning(f"Nenhum texto extraído via OCR")
@@ -836,6 +854,12 @@ class DocumentTextExtractorService:
                     os.unlink(temp_path)
                 except Exception as e:
                     logging.warning(f"Erro ao remover arquivo temporário: {str(e)}")
+
+    def _create_progress_bar(self, percent: float, width: int = 20) -> str:
+        """Cria uma barra de progresso visual"""
+        filled = int(width * percent / 100)
+        bar = '█' * filled + '░' * (width - filled)
+        return f"[{bar}]"
 
     def extract_text_from_pdf_normal(self, file_content: bytes, filename: str) -> List[DocumentModel]:
         """Extração normal de PDF (texto embutido)"""
@@ -928,7 +952,7 @@ class DocumentTextExtractorService:
         processed_files = []
         total_size_mb = sum(len(content) for content, _ in files_data) / (1024 * 1024)
         
-        logging.info(f"Processando {len(files_data)} arquivo(s), tamanho total: {total_size_mb:.1f}MB")
+        logging.info(f"Iniciando processamento: {len(files_data)} arquivo(s), {total_size_mb:.1f}MB total")
         
         if len(files_data) > 10:
             logging.warning(f"Muitos arquivos ({len(files_data)}), pode haver timeout")
@@ -945,7 +969,7 @@ class DocumentTextExtractorService:
                     f"Arquivo {filename}: Apenas arquivos {supported_formats} são suportados"
                 )
 
-            logging.info(f"Processando arquivo {idx+1}/{len(files_data)}: {filename} ({file_size_mb:.1f}MB)")
+            logging.info(f"Arquivo [{idx+1}/{len(files_data)}] {filename} ({file_size_mb:.1f}MB)")
 
             try:
                 file_response = self._process_single_file(file_content, filename)
@@ -968,8 +992,11 @@ class DocumentTextExtractorService:
                 processed_files.append(error_response)
 
         success = any(file_resp.success for file_resp in processed_files)
+        
+        successful_files = sum(1 for f in processed_files if f.success)
+        logging.info(f"Processamento finalizado: {successful_files}/{len(files_data)} arquivos processados com sucesso")
+        
         response = BulkFileUploadResponse(success=success, files=processed_files)
-
         return response
 
     def _process_single_file(

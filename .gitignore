@@ -198,3 +198,4 @@ cython_debug/
 local.settings.json
 .vscode
 
+extraction_results/

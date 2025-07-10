@@ -596,6 +596,7 @@ class DocumentTextExtractorService:
             separators=["\n\n", "\n"],
         )
         
+<<<<<<< Updated upstream
         self._ocr_reader = None
         
         self.MAX_PAGES_PER_BATCH = 20
@@ -841,10 +842,46 @@ class DocumentTextExtractorService:
             if not documents:
                 logging.warning(f"Nenhum texto extraído via OCR")
                 return self.extract_text_from_pdf_normal(file_content, filename)
+=======
+        self.ocr_service = OCRService()
+
+    def extract_text_from_pdf(self, file_content: bytes, filename: str) -> List[DocumentModel]:
+        """Extrai texto de arquivos PDF, detectando automaticamente se precisa de OCR"""
+        
+        is_text_extractable = self.ocr_service.is_pdf_text_extractable(file_content, filename)
+        
+        if not is_text_extractable:
+            logging.info(f"{filename}: PDF detectado como escaneado, usando EasyOCR")
+            return self.ocr_service.extract_text_with_ocr(file_content, filename)
+        
+        try:
+            documents = self.extract_text_from_pdf_normal(file_content, filename)
+            
+            if not documents:
+                logging.info(f"{filename}: Extração normal não retornou texto, tentando OCR")
+                return self.ocr_service.extract_text_with_ocr(file_content, filename)
+            
+            total_chars = sum(len(doc.page_content) for doc in documents)
+            avg_chars_per_page = total_chars / len(documents) if documents else 0
+            
+            if avg_chars_per_page < 50:
+                logging.info(f"{filename}: Texto extraído muito escasso ({avg_chars_per_page:.1f} chars/página), tentando OCR")
+                try:
+                    ocr_documents = self.ocr_service.extract_text_with_ocr(file_content, filename)
+                    
+                    if ocr_documents:
+                        ocr_total_chars = sum(len(doc.page_content) for doc in ocr_documents)
+                        if ocr_total_chars > total_chars * 1.5:
+                            logging.info(f"{filename}: OCR produziu mais texto ({ocr_total_chars} vs {total_chars}), usando OCR")
+                            return ocr_documents
+                except Exception:
+                    logging.info(f"{filename}: OCR falhou, usando extração normal")
+>>>>>>> Stashed changes
             
             return documents
             
         except Exception as e:
+<<<<<<< Updated upstream
             logging.error(f"Erro geral na extração OCR: {str(e)}")
             return self.extract_text_from_pdf_normal(file_content, filename)
             
@@ -860,6 +897,11 @@ class DocumentTextExtractorService:
         filled = int(width * percent / 100)
         bar = '█' * filled + '░' * (width - filled)
         return f"[{bar}]"
+=======
+            logging.error(f"Erro na extração normal de {filename}: {str(e)}")
+            logging.info(f"Tentando OCR como fallback para {filename}")
+            return self.ocr_service.extract_text_with_ocr(file_content, filename)
+>>>>>>> Stashed changes
 
     def extract_text_from_pdf_normal(self, file_content: bytes, filename: str) -> List[DocumentModel]:
         """Extração normal de PDF (texto embutido)"""
@@ -906,6 +948,7 @@ class DocumentTextExtractorService:
 
         return documents
 
+<<<<<<< Updated upstream
     def extract_text_from_pdf(self, file_content: bytes, filename: str) -> List[DocumentModel]:
         """Extrai texto de arquivos PDF, detectando automaticamente se precisa de OCR"""
         
@@ -942,6 +985,8 @@ class DocumentTextExtractorService:
             logging.info(f"Tentando OCR como fallback para {filename}")
             return self.extract_text_from_pdf_with_ocr(file_content, filename)
 
+=======
+>>>>>>> Stashed changes
     def process_file_upload(self) -> BulkFileUploadResponse:
         """Processa upload de múltiplos arquivos com otimizações para documentos grandes"""
         files_data = self._extract_files_from_request()
@@ -999,6 +1044,7 @@ class DocumentTextExtractorService:
         response = BulkFileUploadResponse(success=success, files=processed_files)
         return response
 
+<<<<<<< Updated upstream
     def _process_single_file(
         self, file_content: bytes, filename: str
     ) -> FileUploadResponse:
@@ -1043,6 +1089,8 @@ class DocumentTextExtractorService:
 
         return response
 
+=======
+>>>>>>> Stashed changes
     def _get_file_extension(self, filename: str) -> str:
         """Extrai a extensão do arquivo"""
         return os.path.splitext(filename.lower())[1]

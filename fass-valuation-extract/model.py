@@ -268,3 +268,9 @@ class ContractEntitiesResponse(BaseModel):
         default="NÃO ENCONTRADO",
         description="Percentuais de amortização separados por vírgula",
     )
+    
+class SerieResponse(BaseModel):
+    pass
+
+class SeriesResponse(BaseModel):
+    series: Dict[str, SerieResponse]

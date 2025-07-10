@@ -19,6 +19,9 @@ from .model import (
 )
 
 
+
+
+
 class CustomJSONEncoder(json.JSONEncoder):
     """Encoder JSON personalizado para lidar com tipos numpy e float32"""
 

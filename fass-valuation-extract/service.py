@@ -170,7 +170,7 @@ class DocumentEntityExtractor:
 
             2. **JUROS REMUNERATÓRIOS** – indexador **principal** que corrige os
             **juros** (DI, CDI, taxa prefixada, etc.) 
-            EXEMPLO: "DI+" ou "DI" ou "IPCA" ou "IPCA+" ou "CDI" ou "CDI+" ou "SELIC" ou "SELIC+", etc.
+            VALOR UNICO: EXEMPLO: "DI+" ou "DI" ou "IPCA" ou "IPCA+" ou "CDI" ou "CDI+" ou "SELIC" ou "SELIC+", etc.
 
             3. **SPREAD FIXO** – percentual adicional **sobre** o indexador principal  
             ["+0,30 %", "acréscimo de 2 % a.a.", "spread"].

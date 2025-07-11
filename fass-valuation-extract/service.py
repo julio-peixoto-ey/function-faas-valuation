@@ -160,6 +160,9 @@ class DocumentEntityExtractor:
             no inicio do documento, deve conter frases com séries como:
             "DAS 1ª, 2ª E 3ª SÉRIES"
             "DAS 1ª (PRIMEIRA), 2ª (SEGUNDA) e 3ª (TERCEIRA) SÉRIES,"
+            
+            A quantidade de séries vai definir o tamanho das listas.
+            
             </how_identify_series>
             
             </series>
@@ -306,7 +309,7 @@ class DocumentEntityExtractor:
             )
             if contract_entities.fluxos_pagamento:
                 logging.info(
-                    f"DEBUG: fluxos_pagamento valor: '{contract_entities.fluxos_pagamento.value}'"
+                    f"DEBUG: fluxos_pagamento valor: '{contract_entities.fluxos_pagamento.values}'"
                 )
 
             logging.info(
@@ -314,7 +317,7 @@ class DocumentEntityExtractor:
             )
             if contract_entities.fluxos_percentuais:
                 logging.info(
-                    f"DEBUG: fluxos_percentuais valor: '{contract_entities.fluxos_percentuais.value}'"
+                    f"DEBUG: fluxos_percentuais valor: '{contract_entities.fluxos_percentuais.values}'"
                 )
 
             fluxos_pagamento = self._extract_dates_from_fluxos(

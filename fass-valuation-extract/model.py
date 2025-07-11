@@ -302,7 +302,7 @@ class ContractEntitiesResponse(BaseModel):
         default_factory=lambda: ["NÃO ENCONTRADO"],
         description="Lista de percentuais de amortização por série separados por vírgula",
     )
-
+    
 class SerieResponse(BaseModel):
     """Resposta para uma série específica"""
     

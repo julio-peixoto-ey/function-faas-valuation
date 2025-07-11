@@ -19,6 +19,9 @@ from .model import (
 )
 
 
+
+
+
 class CustomJSONEncoder(json.JSONEncoder):
     """Encoder JSON personalizado para lidar com tipos numpy e float32"""
 
@@ -48,7 +51,7 @@ def create_error_result(file_response, error_message=""):
         contract_entities=ContractEntity(),
         processing_time_ms=0,
         token_summary=token_counter.get_summary(),
-        error_message=error_message or f"Falha no upload: {file_response.message}",
+        error_message=error_message or f"Falha: {file_response.message}",
     )
 
 
@@ -74,7 +77,7 @@ async def _process_files_parallel(extractor, files, max_workers=3):
         extraction_results = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
-                logging.error(f"Erro processando arquivo {files[i].filename}: {result}")
+                logging.error(f"Erro {files[i].filename}: {result}")
                 extraction_results.append(create_error_result(files[i], str(result)))
             else:
                 extraction_results.append(result)
@@ -94,8 +97,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             return _create_error_response("Método não suportado", 405)
 
     except Exception as e:
-        logging.error(f"Erro na função: {str(e)}")
-        return _create_error_response(f"Erro interno: {str(e)}", 500)
+        logging.error(f"Erro na função: {e}")
+        return _create_error_response(f"Erro interno: {e}", 500)
 
 
 def _handle_info_request() -> func.HttpResponse:
@@ -131,7 +134,7 @@ def _handle_info_request() -> func.HttpResponse:
         extractor = DocumentEntityExtractor()
         info["warm_up"] = "completed"
     except Exception as e:
-        info["warm_up"] = f"failed: {str(e)}"
+        info["warm_up"] = f"failed: {e}"
 
     return func.HttpResponse(
         safe_json_dumps(info), mimetype="application/json", status_code=200
@@ -161,28 +164,41 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
             _process_files_parallel(extractor, upload_response.files)
         )
 
-        tabelas_faas = []
+        tabelas_por_series = {}  # Estrutura: {"serie_1": [...], "serie_2": [...]}
         resumo_faas = []
 
         for extraction_result in extraction_results:
             if extraction_result.success:
-                tabela_contrato = extractor.create_tabela_faas(
+                # Criar tabelas para cada série (já retorna lista de listas)
+                tabelas_series = extractor.create_tabelas_faas_por_series(
                     extraction_result.contract_entities, extraction_result.filename
                 )
-                tabelas_faas.extend(tabela_contrato)
-                linha_resumo = extractor.create_row_faas_resumo(
+                
+                # Organizar por série
+                for idx, tabela_serie in enumerate(tabelas_series):
+                    serie_key = f"serie_{idx + 1}"
+                    if serie_key not in tabelas_por_series:
+                        tabelas_por_series[serie_key] = []
+                    tabelas_por_series[serie_key].extend(tabela_serie)
+                
+                # Criar rows de resumo para cada série
+                rows_resumo_series = extractor.create_rows_faas_resumo_por_series(
                     extraction_result.contract_entities, extraction_result.filename
                 )
-                if linha_resumo:
-                    resumo_faas.append(linha_resumo)
+                resumo_faas.extend(rows_resumo_series)
+                
                 successful_entities = sum(
                     1
                     for field_name in extraction_result.contract_entities.__dataclass_fields__
                     if getattr(extraction_result.contract_entities, field_name)
                     is not None
                 )
+                
+                # Contar o número de séries processadas
+                num_series = extractor._get_series_count(extraction_result.contract_entities)
+                
                 logging.info(
-                    f"Arquivo {extraction_result.filename}: {successful_entities}/9 entidades extraídas"
+                    f"Arquivo {extraction_result.filename}: {successful_entities}/9 entidades extraídas, {num_series} série(s) processada(s)"
                 )
 
         total_processing_time = int((time.time() - upload_start_time) * 1000)
@@ -217,15 +233,15 @@ def _handle_file_upload_and_extraction(req: func.HttpRequest) -> func.HttpRespon
             f"Entidades extraídas: {total_entities_found}/{total_entities_possible} em {total_processing_time}ms"
         )
         logging.info(
-            f"Tabelas FAAS geradas: {len(tabelas_faas)} linhas detalhadas, {len(resumo_faas)} linhas de resumo"
+            f"Tabelas FAAS geradas: {len(tabelas_por_series)} series, {len(resumo_faas)} linhas de resumo"
         )
 
         response_data = final_response.to_dict()
 
         response_data["faas_tables"] = {
-            "tabela_detalhada": tabelas_faas,
+            "tabelas_detalhadas": tabelas_por_series,
             "tabela_resumo": resumo_faas,
-            "total_linhas_detalhadas": len(tabelas_faas),
+            "total_series": len(tabelas_por_series),
             "total_contratos": len(resumo_faas),
         }
 

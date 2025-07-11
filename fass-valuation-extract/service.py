@@ -13,7 +13,6 @@ from .utils import TokenCounter
 from .model import (
     DocumentExtractionResult,
     ContractEntity,
-    ExtractedEntity,
     SeriesExtractedEntity,
     ContractEntitiesResponse,
     BulkFileUploadResponse,
@@ -24,7 +23,6 @@ from langchain.docstore.document import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 import azure.functions as func
-
 from .ocr_service import OCRService
 from PIL import Image
 import io
@@ -118,30 +116,56 @@ class DocumentEntityExtractor:
         try:
             vector_store = self.create_vector_store_from_chunks(document_chunks)
 
-            combined_query = """
+            query = """
             Contratos financeiros: indexação de juros, spread, taxas, datas de emissão e vencimento, 
             valores nominais, cronogramas de pagamento, atualização monetária IPCA IGPM SELIC, 
             bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado, múltiplas séries
             """
 
-            docs = vector_store.similarity_search_with_score(combined_query, k=20)
+            docs = vector_store.similarity_search_with_score(query, k=20)
 
             if not docs:
                 return self._create_empty_result(filename, start_time)
 
             context_parts = []
-            all_page_refs = set()
-
             for doc, score in docs:
                 context_parts.append(
                     f"Chunk {doc.metadata.get('chunk_id', 'N/A')} (página {doc.metadata.get('page', 'N/A')}):\n{doc.page_content}"
                 )
-                if "page" in doc.metadata:
-                    all_page_refs.add(int(doc.metadata["page"]))
 
             full_context = "\n\n---\n\n".join(context_parts)
+            prompt = self._build_extraction_prompt(full_context)
 
-            prompt = f"""
+            response = self.llm.chat.completions.create(
+                model=AZURE_DEPLOYMENT_NAME,
+                response_model=ContractEntitiesResponse,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.1,
+                max_tokens=4096,
+                max_retries=3,
+            )
+
+            contract_entities = self._process_extraction_response(response, full_context)
+            processing_time = int((time.time() - start_time) * 1000)
+            
+            entities_count = sum(1 for field in contract_entities.__dataclass_fields__ 
+                               if getattr(contract_entities, field) is not None)
+            logging.info(f"Extraídas {entities_count}/9 entidades para {filename}")
+
+            return DocumentExtractionResult(
+                filename=filename,
+                success=True,
+                contract_entities=contract_entities,
+                processing_time_ms=processing_time,
+                token_summary=self.token_counter.get_summary(),
+            )
+
+        except Exception as e:
+            logging.error(f"Erro na extração: {e}")
+            return self._create_empty_result(filename, start_time)
+
+    def _build_extraction_prompt(self, context: str) -> str:
+        return f"""
             <role>
             Você é um(a) **analista sênior de contratos financeiros**.  
             Sua tarefa é **LER** o texto abaixo e **DEVOLVER** exatamente **um** objeto
@@ -168,7 +192,7 @@ class DocumentEntityExtractor:
             </series>
             
             <context>
-            {full_context}
+            {context}
             </context>
             
             <rules>
@@ -195,87 +219,54 @@ class DocumentEntityExtractor:
             8. **FLUXOS DE PAGAMENTO** – lista de cronogramas de pagamento por série
             9. **FLUXOS PERCENTUAIS** – lista de percentuais de amortização por série
             </items>
-            """
+        """
 
-            response = self.llm.chat.completions.create(
-                model=AZURE_DEPLOYMENT_NAME,
-                response_model=ContractEntitiesResponse,
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=4096,
-                max_retries=3,
-            )
-
-            contract_entities = ContractEntity()
-            entities_found = 0
-            logging.info(f"DEBUG: Entidades encontradas: {response.model_dump()}")
-            
-            for field_name, value_list in response.model_dump().items():
-                logging.info(f"DEBUG: Processando entidade '{field_name}' com valores: {value_list}")
+    def _process_extraction_response(self, response, context: str) -> ContractEntity:
+        contract_entities = ContractEntity()
+        
+        for field_name, value_list in response.model_dump().items():
+            if value_list and isinstance(value_list, list):
+                valid_values = []
+                confidences = []
+                contexts = []
                 
-                if value_list and isinstance(value_list, list):
-                    # Filtrar valores vazios e "NÃO ENCONTRADO"
-                    valid_values = []
-                    confidences = []
-                    contexts = []
-                    
-                    for value in value_list:
-                        if value and value.strip() and value.upper() != "NÃO ENCONTRADO":
-                            valid_values.append(value.strip())
-                            confidence = self._calculate_confidence_from_context(value, full_context)
-                            confidences.append(confidence)
-                            contexts.append(
-                                full_context[:500] + "..." if len(full_context) > 500 else full_context
-                            )
-                            entities_found += 1
-                        else:
-                            valid_values.append("NÃO ENCONTRADO")
-                            confidences.append(0.0)
-                            contexts.append(None)
-                    
-                    if valid_values:
-                        series_entity = SeriesExtractedEntity(
-                            entity_type=field_name,
-                            values=valid_values,
-                            confidences=confidences,
-                            contexts=contexts,
-                        )
-                        setattr(contract_entities, field_name, series_entity)
-                        logging.info(f"Entidade '{field_name}' encontrada com {len(valid_values)} séries")
+                for value in value_list:
+                    if value and value.strip() and value.upper() != "NÃO ENCONTRADO":
+                        valid_values.append(value.strip())
+                        confidence = self._calculate_confidence(value, context)
+                        confidences.append(confidence)
+                        contexts.append(context[:500] + "..." if len(context) > 500 else context)
+                    else:
+                        valid_values.append("NÃO ENCONTRADO")
+                        confidences.append(0.0)
+                        contexts.append(None)
+                
+                if valid_values:
+                    series_entity = SeriesExtractedEntity(
+                        entity_type=field_name,
+                        values=valid_values,
+                        confidences=confidences,
+                        contexts=contexts,
+                    )
+                    setattr(contract_entities, field_name, series_entity)
+        
+        return contract_entities
 
-            processing_time = int((time.time() - start_time) * 1000)
 
-            logging.info(
-                f"Extração com Instructor: {entities_found} entidades encontradas em múltiplas séries - JSON sempre válido!"
-            )
-
-            return DocumentExtractionResult(
-                filename=filename,
-                success=True,
-                contract_entities=contract_entities,
-                processing_time_ms=processing_time,
-                token_summary=self.token_counter.get_summary(),
-            )
-
-        except Exception as e:
-            logging.error(f"Erro na extração com Instructor: {e}")
-            return self._create_empty_result(filename, start_time)
-
-    def _calculate_confidence_from_context(self, value: str, context: str) -> float:
-        """Calcula confiança baseada na presença do valor no contexto"""
+    def _calculate_confidence(self, value: str, context: str) -> float:
         if not value or not context:
             return 0.5
-
+        
         if value.lower() in context.lower():
             return 0.9
-
+        
         keywords = value.lower().split()
         found_keywords = sum(1 for keyword in keywords if keyword in context.lower())
-
+        
         if found_keywords > 0:
             confidence = min(0.8, 0.5 + (found_keywords / len(keywords)) * 0.3)
             return round(confidence, 3)
-
+        
         return 0.5
 
     def _create_empty_result(
@@ -293,97 +284,166 @@ class DocumentEntityExtractor:
             error_message="Nenhum chunk relevante encontrado no documento",
         )
 
-    def create_tabela_faas(
+    def create_tabelas_faas_por_series(
+        self, contract_entities: ContractEntity, filename: str
+    ) -> List[List[Dict[str, Any]]]:
+        """
+        Cria tabelas FAAS separadas para cada série encontrada no documento.
+        Retorna uma lista de tabelas, onde cada tabela corresponde a uma série.
+        """
+        tabelas_por_series = []
+        
+        try:
+            # Determinar o número de séries
+            num_series = self._get_series_count(contract_entities)
+            logging.info(f"DEBUG: Criando tabelas FAAS para {num_series} série(s) em {filename}")
+            
+            if num_series == 0:
+                logging.warning(f"Nenhuma série encontrada em {filename}")
+                return []
+            
+            # Criar uma tabela para cada série
+            for serie_index in range(num_series):
+                logging.info(f"DEBUG: Processando série {serie_index + 1}/{num_series}")
+                
+                tabela_serie = self._create_tabela_for_single_series(
+                    contract_entities, filename, serie_index
+                )
+                
+                if tabela_serie:
+                    tabelas_por_series.append(tabela_serie)
+                    logging.info(f"Tabela criada para série {serie_index + 1} com {len(tabela_serie)} linhas")
+                else:
+                    logging.warning(f"Não foi possível criar tabela para série {serie_index + 1}")
+            
+            logging.info(f"Total de {len(tabelas_por_series)} tabelas FAAS criadas para {filename}")
+            return tabelas_por_series
+            
+        except Exception as e:
+            logging.error(f"Erro ao criar tabelas FAAS por séries para {filename}: {e}")
+            import traceback
+            logging.error(f"Traceback completo: {traceback.format_exc()}")
+            return []
+
+    def create_rows_faas_resumo_por_series(
         self, contract_entities: ContractEntity, filename: str
     ) -> List[Dict[str, Any]]:
         """
-        Cada row é uma data, tendo Inicio e Vencimento.
-        Inicio / Vencimento / Valor nominal / % Amortização / Index / Spread Fixo
+        Cria rows de resumo FAAS separadas para cada série encontrada no documento.
+        Retorna uma lista de rows, onde cada row corresponde a uma série.
         """
-        tabela_faas = []
-
+        rows_resumo = []
+        
         try:
-            logging.info(f"DEBUG: Iniciando criação de tabela FAAS para {filename}")
-            logging.info(
-                f"DEBUG: fluxos_pagamento existe: {contract_entities.fluxos_pagamento is not None}"
-            )
-            if contract_entities.fluxos_pagamento:
-                logging.info(
-                    f"DEBUG: fluxos_pagamento valor: '{contract_entities.fluxos_pagamento.values}'"
+            # Determinar o número de séries
+            num_series = self._get_series_count(contract_entities)
+            logging.info(f"DEBUG: Criando rows de resumo para {num_series} série(s) em {filename}")
+            
+            if num_series == 0:
+                logging.warning(f"Nenhuma série encontrada em {filename}")
+                return []
+            
+            # Criar uma row para cada série
+            for serie_index in range(num_series):
+                logging.info(f"DEBUG: Processando resumo série {serie_index + 1}/{num_series}")
+                
+                row_resumo = self._create_resumo_for_single_series(
+                    contract_entities, filename, serie_index
                 )
+                
+                if row_resumo:
+                    rows_resumo.append(row_resumo)
+                    logging.info(f"Row de resumo criada para série {serie_index + 1}")
+                else:
+                    logging.warning(f"Não foi possível criar row de resumo para série {serie_index + 1}")
+            
+            logging.info(f"Total de {len(rows_resumo)} rows de resumo criadas para {filename}")
+            return rows_resumo
+            
+        except Exception as e:
+            logging.error(f"Erro ao criar rows de resumo por séries para {filename}: {e}")
+            import traceback
+            logging.error(f"Traceback completo: {traceback.format_exc()}")
+            return []
 
-            logging.info(
-                f"DEBUG: fluxos_percentuais existe: {contract_entities.fluxos_percentuais is not None}"
+    def _get_series_count(self, contract_entities: ContractEntity) -> int:
+        """Determina o número de séries baseado nas entidades extraídas"""
+        max_series = 0
+        
+        # Verificar cada entidade e pegar o maior número de séries
+        for field_name in contract_entities.__dataclass_fields__:
+            entity = getattr(contract_entities, field_name)
+            if entity and hasattr(entity, 'series_count'):
+                max_series = max(max_series, entity.series_count)
+        
+        return max_series
+
+    def _create_tabela_for_single_series(
+        self, contract_entities: ContractEntity, filename: str, serie_index: int
+    ) -> List[Dict[str, Any]]:
+        """Cria uma tabela FAAS para uma série específica"""
+        tabela_faas = []
+        
+        try:
+            # Extrair valores específicos da série
+            fluxos_pagamento = self._extract_dates_from_series(
+                contract_entities.fluxos_pagamento, serie_index
             )
-            if contract_entities.fluxos_percentuais:
-                logging.info(
-                    f"DEBUG: fluxos_percentuais valor: '{contract_entities.fluxos_percentuais.values}'"
-                )
-
-            fluxos_pagamento = self._extract_dates_from_fluxos(
-                contract_entities.fluxos_pagamento
+            fluxos_percentuais = self._extract_percentages_from_series(
+                contract_entities.fluxos_percentuais, serie_index
             )
-            fluxos_percentuais = self._extract_percentages_from_fluxos(
-                contract_entities.fluxos_percentuais
+            
+            valor_nominal = self._get_value_for_series(
+                contract_entities.valor_nominal_unitario, serie_index, ""
             )
-
-            logging.info(f"DEBUG: fluxos_pagamento extraídos: {fluxos_pagamento}")
-            logging.info(f"DEBUG: fluxos_percentuais extraídos: {fluxos_percentuais}")
-
-            valor_nominal = self._get_entity_value(
-                contract_entities.valor_nominal_unitario, ""
+            index_info = self._get_value_for_series(
+                contract_entities.juros_remuneratorios, serie_index, ""
             )
-            index_info = self._get_entity_value(
-                contract_entities.juros_remuneratorios, ""
-            )
-
-            index_completo = self._combine_index_info(index_info)
-
+            
+            serie_id = f"{filename}_serie_{serie_index + 1}"
+            
             if not fluxos_pagamento:
-                logging.info(
-                    "DEBUG: Nenhum fluxo de pagamento encontrado, criando linha básica"
+                logging.info(f"DEBUG: Nenhum fluxo de pagamento para série {serie_index + 1}, criando linha básica")
+                
+                data_inicio = self._get_date_for_series(
+                    contract_entities.data_emissao, serie_index, True
                 )
-                data_inicio = self._get_first_emission_date(
-                    contract_entities.data_emissao
+                data_vencimento = self._get_date_for_series(
+                    contract_entities.data_vencimento, serie_index, False
                 )
-                data_vencimento = self._get_last_maturity_date(
-                    contract_entities.data_vencimento
-                )
-
-                if data_inicio or data_vencimento:
-                    linha_faas = {
-                        "Código": filename,
-                        "Início": data_inicio,
-                        "Vencimento": data_vencimento,
-                        "Valor Nominal": valor_nominal,
-                        "Valor Atualizado": "",
-                        "% Amort": "100,00%",
-                        "Amort. Nominal": "",
-                        "Amort. Atual.": "",
-                        "Amort. extra.": "",
-                        "Remuneração": index_completo,
-                        "D": "",
-                    }
-                    tabela_faas.append(linha_faas)
-                    logging.info("DEBUG: Linha básica criada com sucesso")
+                
+                linha_faas = {
+                    "Código": serie_id,
+                    "Início": data_inicio,
+                    "Vencimento": data_vencimento,
+                    "Valor Nominal": valor_nominal,
+                    "Valor Atualizado": "",
+                    "% Amort": "100,00%",
+                    "Amort. Nominal": "",
+                    "Amort. Atual.": "",
+                    "Amort. extra.": "",
+                    "Remuneração": index_info,
+                    "D": "",
+                }
+                tabela_faas.append(linha_faas)
+                logging.info(f"Linha básica criada para série {serie_index + 1}")
             else:
-                logging.info(
-                    f"DEBUG: Criando {len(fluxos_pagamento)} linhas a partir dos fluxos"
-                )
+                logging.info(f"DEBUG: Criando {len(fluxos_pagamento)} linhas para série {serie_index + 1}")
+                
                 for i, data_pagamento in enumerate(fluxos_pagamento):
                     percentual_amortizacao = (
                         fluxos_percentuais[i] if i < len(fluxos_percentuais) else ""
                     )
-
+                    
                     if i == 0:
-                        data_inicio = self._get_first_emission_date(
-                            contract_entities.data_emissao
+                        data_inicio = self._get_date_for_series(
+                            contract_entities.data_emissao, serie_index, True
                         )
                     else:
                         data_inicio = fluxos_pagamento[i - 1]
-
+                    
                     linha_faas = {
-                        "Código": filename,
+                        "Código": serie_id,
                         "Início": data_inicio,
                         "Vencimento": data_pagamento,
                         "Valor Nominal": valor_nominal,
@@ -392,53 +452,42 @@ class DocumentEntityExtractor:
                         "Amort. Nominal": "",
                         "Amort. Atual.": "",
                         "Amort. extra.": "",
-                        "Remuneração": index_completo,
+                        "Remuneração": index_info,
                         "D": "",
                     }
-
+                    
                     tabela_faas.append(linha_faas)
-
-            logging.info(
-                f"Tabela FAAS criada com {len(tabela_faas)} linhas para o arquivo {filename}"
-            )
-            if tabela_faas:
-                logging.info(f"Primeira linha da tabela FAAS: {tabela_faas[0]}")
+            
             return tabela_faas
-
+            
         except Exception as e:
-            logging.error(f"Erro ao criar tabela FAAS para {filename}: {e}")
-            import traceback
-
-            logging.error(f"Traceback completo: {traceback.format_exc()}")
+            logging.error(f"Erro ao criar tabela para série {serie_index + 1}: {e}")
             return []
 
-    def create_row_faas_resumo(
-        self, contract_entities: ContractEntity, filename: str
+    def _create_resumo_for_single_series(
+        self, contract_entities: ContractEntity, filename: str, serie_index: int
     ) -> Dict[str, Any]:
-        """
-        Cada row é um contrato, sendo o inicio a primeira data de emissao, e o vencimento a ultima data de vencimento.
-        Nome do arquivo /Inicio / Vencimento / % Amortização / Valor nominal / Index / Spread Fixo
-        """
+        """Cria uma row de resumo para uma série específica"""
         try:
-            data_inicio = self._get_first_emission_date(contract_entities.data_emissao)
-            data_vencimento = self._get_last_maturity_date(
-                contract_entities.data_vencimento
+            # Extrair valores específicos da série
+            data_inicio = self._get_date_for_series(
+                contract_entities.data_emissao, serie_index, True
             )
-
-            index_info = self._get_entity_value(
-                contract_entities.juros_remuneratorios, ""
+            data_vencimento = self._get_date_for_series(
+                contract_entities.data_vencimento, serie_index, False
             )
-            atualizacao_monetaria = self._get_entity_value(
-                contract_entities.atualizacao_monetaria, ""
+            
+            index_info = self._get_value_for_series(
+                contract_entities.juros_remuneratorios, serie_index, ""
             )
-
-            index_completo = self._combine_index_info(index_info)
-
+            
+            serie_id = f"{filename}_serie_{serie_index + 1}"
+            
             linha_resumo = {
-                "Nome do Arquivo": filename,
+                "Nome do Arquivo": serie_id,
                 "Fundo": "Agente",
                 "Link A": "",
-                "Index": index_completo,
+                "Index": index_info,
                 "Aplicação": "",
                 "Emissão": data_inicio,
                 "Vencimento": data_vencimento,
@@ -447,113 +496,95 @@ class DocumentEntityExtractor:
                 "PU Custo": "",
                 "Saldo": "",
             }
-
-            logging.info(f"Linha de resumo FAAS criada para o arquivo {filename}")
-            logging.info(f"Linha de resumo FAAS: {linha_resumo}")
+            
             return linha_resumo
-
+            
         except Exception as e:
-            logging.error(f"Erro ao criar linha de resumo FAAS para {filename}: {e}")
+            logging.error(f"Erro ao criar resumo para série {serie_index + 1}: {e}")
             return {}
 
-    def _extract_dates_from_fluxos(
-        self, fluxos_entity: Optional[ExtractedEntity]
+    def _get_value_for_series(
+        self, entity: Optional[SeriesExtractedEntity], serie_index: int, default: str = ""
+    ) -> str:
+        """Extrai valor de uma entidade para uma série específica"""
+        if not entity or not entity.values or serie_index >= len(entity.values):
+            return default
+        
+        value = entity.values[serie_index]
+        return value if value and value.upper() != "NÃO ENCONTRADO" else default
+
+    def _get_date_for_series(
+        self, data_emissao_entity: Optional[SeriesExtractedEntity], serie_index: int, is_first: bool
+    ) -> str:
+        """Extrai a data de emissão para uma série específica"""
+        value = self._get_value_for_series(data_emissao_entity, serie_index, "")
+        if not value:
+            return ""
+        
+        # Se há vírgulas, pegar a primeira data
+        dates = value.split(",")
+        first_date = dates[0].strip() if is_first else dates[-1].strip()
+        
+        return self._normalize_date_format(first_date)
+
+    def _extract_dates_from_series(
+        self, fluxos_entity: Optional[SeriesExtractedEntity], serie_index: int
     ) -> List[str]:
-        """Extrai lista de datas dos fluxos de pagamento"""
-        logging.info("DEBUG: _extract_dates_from_fluxos chamado")
-        if not fluxos_entity or not fluxos_entity.value:
-            logging.info("DEBUG: Nenhum fluxo de pagamento encontrado ou valor vazio")
+        """Extrai lista de datas dos fluxos de pagamento para uma série específica"""
+        value = self._get_value_for_series(fluxos_entity, serie_index, "")
+        if not value:
             return []
-
-        logging.info(f"DEBUG: Valor dos fluxos de pagamento: '{fluxos_entity.value}'")
-
+        
         date_pattern = r"\d{1,2}/\d{1,2}/\d{2,4}"
-        dates = re.findall(date_pattern, fluxos_entity.value)
-
-        logging.info(f"DEBUG: Datas encontradas com regex: {dates}")
-
+        dates = re.findall(date_pattern, value)
+        
         if not dates:
-            logging.info(
-                "DEBUG: Nenhuma data encontrada com regex, tentando extração flexível"
-            )
-            parts = fluxos_entity.value.split(",")
+            # Tentativa flexível
+            parts = value.split(",")
             for part in parts:
                 part = part.strip()
                 flexible_pattern = r"\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{2,4}"
                 found_dates = re.findall(flexible_pattern, part)
                 if found_dates:
                     dates.extend(found_dates)
-
-            logging.info(f"DEBUG: Datas encontradas com extração flexível: {dates}")
-
+        
         return dates
 
-    def _extract_percentages_from_fluxos(
-        self, fluxos_entity: Optional[ExtractedEntity]
+    def _extract_percentages_from_series(
+        self, fluxos_entity: Optional[SeriesExtractedEntity], serie_index: int
     ) -> List[str]:
-        """Extrai lista de percentuais dos fluxos percentuais"""
-        if not fluxos_entity or not fluxos_entity.value:
+        """Extrai lista de percentuais dos fluxos percentuais para uma série específica"""
+        value = self._get_value_for_series(fluxos_entity, serie_index, "")
+        if not value:
             return []
-
-        percentages = [p.strip() for p in fluxos_entity.value.split(",")]
-
-        return percentages
-
-    def _get_entity_value(
-        self, entity: Optional[ExtractedEntity], default: str = ""
-    ) -> str:
-        """Extrai valor de uma entidade ou retorna default"""
-        if entity and entity.value:
-            return entity.value
-        return default
-
-    def _get_first_emission_date(
-        self, data_emissao_entity: Optional[ExtractedEntity]
-    ) -> str:
-        """Extrai a primeira data de emissão"""
-        if not data_emissao_entity or not data_emissao_entity.value:
-            return ""
-
-        dates = data_emissao_entity.value.split(",")
-        first_date = dates[0].strip()
-
-        return self._normalize_date_format(first_date)
-
-    def _get_last_maturity_date(
-        self, data_vencimento_entity: Optional[ExtractedEntity]
-    ) -> str:
-        """Extrai a última data de vencimento"""
-        if not data_vencimento_entity or not data_vencimento_entity.value:
-            return ""
-
-        dates = data_vencimento_entity.value.split(",")
-        last_date = dates[-1].strip()
-
-        return self._normalize_date_format(last_date)
+        
+        percentages = [p.strip() for p in value.split(",")]
+        # Corrigir formato dos percentuais
+        formatted_percentages = []
+        for perc in percentages:
+            if perc and perc != "NÃO ENCONTRADO":
+                # Garantir formato correto (X,XXXX%)
+                if '%' in perc:
+                    # Se já tem %, manter
+                    formatted_percentages.append(perc)
+                else:
+                    # Se não tem %, adicionar
+                    formatted_percentages.append(f"{perc}%")
+            else:
+                formatted_percentages.append(perc)
+        
+        return formatted_percentages
 
     def _normalize_date_format(self, date_str: str) -> str:
-        """Normaliza formato de data para DD/MM/YYYY"""
-        if not date_str:
-            return ""
-
-        if re.match(r"\d{1,2}/\d{1,2}/\d{4}", date_str):
+        if not date_str or re.match(r"\d{1,2}/\d{1,2}/\d{4}", date_str):
             return date_str
-
+        
         months = {
-            "janeiro": "01",
-            "fevereiro": "02",
-            "março": "03",
-            "abril": "04",
-            "maio": "05",
-            "junho": "06",
-            "julho": "07",
-            "agosto": "08",
-            "setembro": "09",
-            "outubro": "10",
-            "novembro": "11",
-            "dezembro": "12",
+            "janeiro": "01", "fevereiro": "02", "março": "03", "abril": "04",
+            "maio": "05", "junho": "06", "julho": "07", "agosto": "08",
+            "setembro": "09", "outubro": "10", "novembro": "11", "dezembro": "12",
         }
-
+        
         for month_name, month_num in months.items():
             if month_name in date_str.lower():
                 parts = date_str.split()
@@ -561,33 +592,8 @@ class DocumentEntityExtractor:
                     day = parts[0].strip()
                     year = parts[-1].strip()
                     return f"{day.zfill(2)}/{month_num}/{year}"
-
+        
         return date_str
-
-    def _combine_index_info(self, index_info: str) -> str:
-        """Combina informações de index e atualização monetária"""
-        return index_info
-
-    def _calculate_total_amortization(
-        self, fluxos_percentuais_entity: Optional[ExtractedEntity]
-    ) -> str:
-        """Calcula o total de amortização somando todos os percentuais"""
-        if not fluxos_percentuais_entity or not fluxos_percentuais_entity.value:
-            return "0,00%"
-
-        try:
-            percentages = fluxos_percentuais_entity.value.split(",")
-            total = 0.0
-
-            for perc in percentages:
-                clean_perc = perc.strip().replace("%", "").replace(",", ".")
-                if clean_perc:
-                    total += float(clean_perc)
-
-            return f"{total:.2f}%".replace(".", ",")
-
-        except (ValueError, AttributeError):
-            return "0,00%"
 
 
 class DocumentTextExtractorService:

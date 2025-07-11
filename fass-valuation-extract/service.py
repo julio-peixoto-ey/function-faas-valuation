@@ -119,10 +119,10 @@ class DocumentEntityExtractor:
             query = """
             Contratos financeiros: indexação de juros, spread, taxas, datas de emissão e vencimento, 
             valores nominais, cronogramas de pagamento, atualização monetária IPCA IGPM SELIC, 
-            bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado, múltiplas séries
+            bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado, múltiplas séries.
             """
 
-            docs = vector_store.similarity_search_with_score(query, k=20)
+            docs = vector_store.similarity_search_with_score(query, k=40)
 
             if not docs:
                 return self._create_empty_result(filename, start_time)

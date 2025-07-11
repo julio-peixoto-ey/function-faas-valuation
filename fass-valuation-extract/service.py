@@ -117,9 +117,37 @@ class DocumentEntityExtractor:
             vector_store = self.create_vector_store_from_chunks(document_chunks)
 
             query = """
-            Contratos financeiros: indexação de juros, spread, taxas, datas de emissão e vencimento, 
-            valores nominais, cronogramas de pagamento, atualização monetária IPCA IGPM SELIC, 
-            bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado, múltiplas séries.
+            
+            <series>
+            O contexto é um documento de contrato financeiro.
+            O documento pode conter uma ou mais séries.
+            Cada série representa um contrato diferente.
+            Cada campo deve ser uma LISTA onde cada posição corresponde a uma série.
+            Se houver apenas uma série, retorne listas com um único elemento.
+            Se não houver informação para uma série específica, use "NÃO ENCONTRADO" para essa posição.
+            
+            <how_identify_series>
+            no inicio do documento, deve conter frases com séries como:
+            "DAS 1ª, 2ª E 3ª SÉRIES"
+            "DAS 1ª (PRIMEIRA), 2ª (SEGUNDA) e 3ª (TERCEIRA) SÉRIES,"
+            
+            A quantidade de séries vai definir o tamanho das listas.
+            
+            </how_identify_series>
+            
+            </series>
+            
+            ITENS QUE DEVEM SER EXTRAÍDOS:
+
+            1. **ATUALIZAÇÃO MONETÁRIA** – lista de índices que corrigem o **principal** por série
+            2. **JUROS REMUNERATÓRIOS** – lista de indexadores **principal** por série (DI, CDI, IPCA, etc.)
+            3. **SPREAD FIXO** – lista de percentuais adicionais por série
+            4. **BASE DE CÁLCULO** – lista de metodologias por série (252, 365, ACT/360)
+            5. **DATA EMISSÃO** – lista de datas de emissão por série
+            6. **DATA VENCIMENTO** – lista de datas de vencimento por série
+            7. **VALOR NOMINAL UNITÁRIO** – lista de valores de face por série
+            8. **FLUXOS DE PAGAMENTO** – lista de cronogramas de pagamento por série
+            9. **FLUXOS PERCENTUAIS** – lista de percentuais de amortização por série
             """
 
             docs = vector_store.similarity_search_with_score(query, k=40)

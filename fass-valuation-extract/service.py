@@ -14,6 +14,7 @@ from .model import (
     DocumentExtractionResult,
     ContractEntity,
     ExtractedEntity,
+    SeriesExtractedEntity,
     ContractEntitiesResponse,
     BulkFileUploadResponse,
     FileUploadResponse,
@@ -120,7 +121,7 @@ class DocumentEntityExtractor:
             combined_query = """
             Contratos financeiros: indexação de juros, spread, taxas, datas de emissão e vencimento, 
             valores nominais, cronogramas de pagamento, atualização monetária IPCA IGPM SELIC, 
-            bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado
+            bases de cálculo 252 365 dias, fluxos de amortização, DI CDI pré-fixado, múltiplas séries
             """
 
             docs = vector_store.similarity_search_with_score(combined_query, k=20)
@@ -144,60 +145,52 @@ class DocumentEntityExtractor:
             <role>
             Você é um(a) **analista sênior de contratos financeiros**.  
             Sua tarefa é **LER** o texto abaixo e **DEVOLVER** exatamente **um** objeto
-            JSON com os nove campos pedidos, **somente strings** (nunca arrays),
-            no formato mostrado depois da lista.
+            JSON com os nove campos pedidos, **com listas** para cada campo (cada posição da lista representa uma série).
             </role>
+            
+            <series>
+            O contexto é um documento de contrato financeiro.
+            O documento pode conter uma ou mais séries.
+            Cada série representa um contrato diferente.
+            Cada campo deve ser uma LISTA onde cada posição corresponde a uma série.
+            Se houver apenas uma série, retorne listas com um único elemento.
+            Se não houver informação para uma série específica, use "NÃO ENCONTRADO" para essa posição.
+            
+            <how_identify_series>
+            no inicio do documento, deve conter frases com séries como:
+            "DAS 1ª, 2ª E 3ª SÉRIES"
+            "DAS 1ª (PRIMEIRA), 2ª (SEGUNDA) e 3ª (TERCEIRA) SÉRIES,"
+            </how_identify_series>
+            
+            </series>
+            
             <context>
             {full_context}
             </context>
+            
             <rules>
             REGRAS OBRIGATÓRIAS
             1. Copie o conteúdo **exatamente como está no contrato** – não traduza
             nem reescreva números, índices ou datas.
-            2. Se o item não existir, responda **"NÃO ENCONTRADO"**.
-            3. Se houver mais de um valor para o mesmo item, una-os em **uma única
+            2. Se o item não existir para uma série, responda **"NÃO ENCONTRADO"**.
+            3. Se houver mais de um valor para o mesmo item na mesma série, una-os em **uma única
             string separada por vírgulas**, mantendo a ordem em que aparecem.
-            4. Retorne apenas o JSON válido (sem comentários, sem texto antes ou
-            depois).
+            4. Retorne listas para cada campo, onde cada posição corresponde a uma série.
+            5. Retorne apenas o JSON válido (sem comentários, sem texto antes ou depois).
             </rules>
+            
             <items>
-            ITENS QUE DEVEM SER EXTRAÍDOS  
-            (***guias de busca*** entre colchetes ajudam a localizar no contrato)
+            ITENS QUE DEVEM SER EXTRAÍDOS COMO LISTAS:
 
-            1. **ATUALIZAÇÃO MONETÁRIA** – índice que corrige o **principal**  
-            [palavras-chave: "atualização monetária", "índice de correção",
-            "IPCA", "IGP-M", "SELIC", "não haverá atualização"].
-
-            2. **JUROS REMUNERATÓRIOS** – indexador **principal** que corrige os
-            **juros** (DI, CDI, taxa prefixada, etc.) 
-            VALOR UNICO: EXEMPLO: "DI+" ou "DI" ou "IPCA" ou "IPCA+" ou "CDI" ou "CDI+" ou "SELIC" ou "SELIC+", etc.
-
-            3. **SPREAD FIXO** – percentual adicional **sobre** o indexador principal  
-            ["+0,30 %", "acréscimo de 2 % a.a.", "spread"].
-
-            4. **BASE DE CÁLCULO** – metodologia usada nas fórmulas de juros  
-            ["252 dias úteis", "365/365", "base ACT/360"].
-
-            5. **DATA EMISSÃO** – data(s) a partir da qual o título passa a vigorar  
-            ["Data de Emissão", "Data de Colocação"; se houver séries, todas elas].
-
-            6. **DATA VENCIMENTO** – data(s) final(is) da obrigação correspondente  
-            ["Data de Vencimento", "Vencimento Final"; manter mesma ordem de
-            emissão].
-
-            7. **VALOR NOMINAL UNITÁRIO** – valor de face por título/cota  
-            ["Valor Nominal Unitário", "VNU", "Valor de Face"].
-
-            8. **FLUXOS DE PAGAMENTO DE AMORTIZAÇÃO E JUROS** – **todas** as datas
-            que aparecem no cronograma / anexo de pagamentos  
-            ["Cronograma de Pagamento", "Anexo XI", "Fluxo de Caixa"].
-            → Devolva **todas** em uma única string, separadas por vírgulas,
-            no formato DD/MM/AAAA.
-
-            9. **FLUXOS PERCENTUAIS DE AMORTIZAÇÃO E JUROS** – percentuais que
-            aparecem na mesma tabela do item 8, na **mesma ordem** das datas  
-            [colunas "% Amortização", "Taxa de Amort."].
-            → Use vírgula como separador e vírgula decimal (ex.: 0,0000 %).
+            1. **ATUALIZAÇÃO MONETÁRIA** – lista de índices que corrigem o **principal** por série
+            2. **JUROS REMUNERATÓRIOS** – lista de indexadores **principal** por série (DI, CDI, IPCA, etc.)
+            3. **SPREAD FIXO** – lista de percentuais adicionais por série
+            4. **BASE DE CÁLCULO** – lista de metodologias por série (252, 365, ACT/360)
+            5. **DATA EMISSÃO** – lista de datas de emissão por série
+            6. **DATA VENCIMENTO** – lista de datas de vencimento por série
+            7. **VALOR NOMINAL UNITÁRIO** – lista de valores de face por série
+            8. **FLUXOS DE PAGAMENTO** – lista de cronogramas de pagamento por série
+            9. **FLUXOS PERCENTUAIS** – lista de percentuais de amortização por série
             </items>
             """
 
@@ -212,33 +205,45 @@ class DocumentEntityExtractor:
 
             contract_entities = ContractEntity()
             entities_found = 0
-
-            for field_name, value in response.model_dump().items():
-                if value and value.strip() and value.upper() != "NÃO ENCONTRADO":
-                    confidence = self._calculate_confidence_from_context(
-                        value, full_context
-                    )
-
-                    entity = ExtractedEntity(
-                        entity_type=field_name,
-                        value=value.strip(),
-                        confidence=confidence,
-                        context=(
-                            full_context[:500] + "..."
-                            if len(full_context) > 500
-                            else full_context
-                        ),
-                    )
-                    setattr(contract_entities, field_name, entity)
-                    entities_found += 1
-                    logging.info(
-                        f"Entidade '{field_name}' encontrada: {value.strip()[:50]}..."
-                    )
+            logging.info(f"DEBUG: Entidades encontradas: {response.model_dump()}")
+            
+            for field_name, value_list in response.model_dump().items():
+                logging.info(f"DEBUG: Processando entidade '{field_name}' com valores: {value_list}")
+                
+                if value_list and isinstance(value_list, list):
+                    # Filtrar valores vazios e "NÃO ENCONTRADO"
+                    valid_values = []
+                    confidences = []
+                    contexts = []
+                    
+                    for value in value_list:
+                        if value and value.strip() and value.upper() != "NÃO ENCONTRADO":
+                            valid_values.append(value.strip())
+                            confidence = self._calculate_confidence_from_context(value, full_context)
+                            confidences.append(confidence)
+                            contexts.append(
+                                full_context[:500] + "..." if len(full_context) > 500 else full_context
+                            )
+                            entities_found += 1
+                        else:
+                            valid_values.append("NÃO ENCONTRADO")
+                            confidences.append(0.0)
+                            contexts.append(None)
+                    
+                    if valid_values:
+                        series_entity = SeriesExtractedEntity(
+                            entity_type=field_name,
+                            values=valid_values,
+                            confidences=confidences,
+                            contexts=contexts,
+                        )
+                        setattr(contract_entities, field_name, series_entity)
+                        logging.info(f"Entidade '{field_name}' encontrada com {len(valid_values)} séries")
 
             processing_time = int((time.time() - start_time) * 1000)
 
             logging.info(
-                f"Extração com Instructor: {entities_found}/9 entidades - JSON sempre válido!"
+                f"Extração com Instructor: {entities_found} entidades encontradas em múltiplas séries - JSON sempre válido!"
             )
 
             return DocumentExtractionResult(

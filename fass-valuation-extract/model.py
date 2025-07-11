@@ -14,18 +14,54 @@ class ExtractedEntity:
 
 
 @dataclass
-class ContractEntity:
-    """Entidades específicas de contratos financeiros"""
+class SeriesExtractedEntity:
+    """Entidade extraída com suporte para múltiplas séries"""
 
-    atualizacao_monetaria: Optional[ExtractedEntity] = None
-    juros_remuneratorios: Optional[ExtractedEntity] = None
-    spread_fixo: Optional[ExtractedEntity] = None
-    base_calculo: Optional[ExtractedEntity] = None
-    data_emissao: Optional[ExtractedEntity] = None
-    data_vencimento: Optional[ExtractedEntity] = None
-    valor_nominal_unitario: Optional[ExtractedEntity] = None
-    fluxos_pagamento: Optional[ExtractedEntity] = None
-    fluxos_percentuais: Optional[ExtractedEntity] = None
+    entity_type: str
+    values: List[str]
+    confidences: List[float]
+    contexts: List[Optional[str]]
+
+    def __post_init__(self):
+        """Garantir que todas as listas tenham o mesmo tamanho"""
+        max_len = max(len(self.values), len(self.confidences), len(self.contexts))
+        
+        # Preencher listas menores com valores padrão
+        while len(self.values) < max_len:
+            self.values.append("NÃO ENCONTRADO")
+        while len(self.confidences) < max_len:
+            self.confidences.append(0.0)
+        while len(self.contexts) < max_len:
+            self.contexts.append(None)
+
+    @property
+    def series_count(self) -> int:
+        return len(self.values)
+
+    def to_dict(self) -> Dict[str, Any]:
+        if self.series_count == 0:
+            return None
+        
+        return {
+            "value": self.values,
+            "confidence": self.confidences,
+            "context": self.contexts,
+        }
+
+
+@dataclass
+class ContractEntity:
+    """Entidades específicas de contratos financeiros com suporte para múltiplas séries"""
+
+    atualizacao_monetaria: Optional[SeriesExtractedEntity] = None
+    juros_remuneratorios: Optional[SeriesExtractedEntity] = None
+    spread_fixo: Optional[SeriesExtractedEntity] = None
+    base_calculo: Optional[SeriesExtractedEntity] = None
+    data_emissao: Optional[SeriesExtractedEntity] = None
+    data_vencimento: Optional[SeriesExtractedEntity] = None
+    valor_nominal_unitario: Optional[SeriesExtractedEntity] = None
+    fluxos_pagamento: Optional[SeriesExtractedEntity] = None
+    fluxos_percentuais: Optional[SeriesExtractedEntity] = None
 
 
 @dataclass
@@ -124,11 +160,7 @@ class ExtractionResponse:
         for field_name in entities.__dataclass_fields__:
             entity = getattr(entities, field_name)
             if entity:
-                result[field_name] = {
-                    "value": entity.value,
-                    "confidence": entity.confidence,
-                    "context": entity.context,
-                }
+                result[field_name] = entity.to_dict()
             else:
                 result[field_name] = None
         return result
@@ -224,53 +256,73 @@ class ErrorResponse:
     
 
 class ContractEntitiesResponse(BaseModel):
+    """Resposta para múltiplas séries de contratos"""
 
-    atualizacao_monetaria: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Índice que corrige o principal (IPCA, IGP-M, SELIC, etc.)",
+    atualizacao_monetaria: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de índices que corrigem o principal por série (IPCA, IGP-M, SELIC, etc.)",
     )
 
-    juros_remuneratorios: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Indexador principal dos juros (DI+, CDI+, IPCA+, etc.)",
+    juros_remuneratorios: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de indexadores principais dos juros por série (DI+, CDI+, IPCA+, etc.)",
     )
 
-    spread_fixo: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Percentual adicional sobre o indexador principal",
+    spread_fixo: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de percentuais adicionais sobre o indexador principal por série",
     )
 
-    base_calculo: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Metodologia de cálculo de juros (252, 365, ACT/360)",
+    base_calculo: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de metodologias de cálculo de juros por série (252, 365, ACT/360)",
     )
 
-    data_emissao: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Data(s) de emissão do título no formato DD/MM/AAAA",
+    data_emissao: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de datas de emissão do título por série no formato DD/MM/AAAA",
     )
 
-    data_vencimento: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Data(s) de vencimento no formato DD/MM/AAAA",
+    data_vencimento: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de datas de vencimento por série no formato DD/MM/AAAA",
     )
 
-    valor_nominal_unitario: str = Field(
-        default="NÃO ENCONTRADO", description="Valor de face por título/cota"
+    valor_nominal_unitario: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de valores de face por título/cota por série"
     )
 
-    fluxos_pagamento: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Datas do cronograma de pagamentos separadas por vírgula",
+    fluxos_pagamento: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de datas do cronograma de pagamentos por série separadas por vírgula",
     )
 
-    fluxos_percentuais: str = Field(
-        default="NÃO ENCONTRADO",
-        description="Percentuais de amortização separados por vírgula",
+    fluxos_percentuais: List[str] = Field(
+        default_factory=lambda: ["NÃO ENCONTRADO"],
+        description="Lista de percentuais de amortização por série separados por vírgula",
     )
-    
+
 class SerieResponse(BaseModel):
-    pass
+    """Resposta para uma série específica"""
+    
+    serie_id: str
+    atualizacao_monetaria: str = "NÃO ENCONTRADO"
+    juros_remuneratorios: str = "NÃO ENCONTRADO"
+    spread_fixo: str = "NÃO ENCONTRADO"
+    base_calculo: str = "NÃO ENCONTRADO"
+    data_emissao: str = "NÃO ENCONTRADO"
+    data_vencimento: str = "NÃO ENCONTRADO"
+    valor_nominal_unitario: str = "NÃO ENCONTRADO"
+    fluxos_pagamento: str = "NÃO ENCONTRADO"
+    fluxos_percentuais: str = "NÃO ENCONTRADO"
 
 class SeriesResponse(BaseModel):
+    """Resposta para múltiplas séries"""
+    
     series: Dict[str, SerieResponse]
+    total_series: int = 0
+    
+    def __init__(self, **data):
+        super().__init__(**data)
+        self.total_series = len(self.series)

@@ -11,16 +11,7 @@ Este guia mostra como configurar uma Azure Function do zero e fazer pull de uma 
 
 ## 🛠️ Instalação das Ferramentas
 
-### 1. Instalar Azure CLI
-```bash
-# Baixar e instalar do site oficial
-https://aka.ms/installazurecliwindows
-
-# Verificar instalação
-az --version
-```
-
-### 2. Instalar Azure Functions Core Tools
+### 1. Instalar Azure Functions Core Tools
 ```bash
 # Via npm (recomendado)
 npm install -g azure-functions-core-tools@4 --unsafe-perm true
@@ -29,51 +20,69 @@ npm install -g azure-functions-core-tools@4 --unsafe-perm true
 func --version
 ```
 
-## 🔐 Configurar Acesso ao Azure
+### 2. Instalar uv (Gerenciador de Pacotes Python)
 
-### 1. Login no Azure CLI
+#### Instalação do uv
 ```bash
-# Login padrão
-az login
+# Via pip
+pip install uv
 
-# Se tiver problemas com MFA, use device code
-az login --use-device-code
+# Via PowerShell (Windows)
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# Via curl (WSL/Linux)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Verificar instalação
+uv --version
 ```
 
-### 2. Verificar Subscription
+#### Configurar Projeto com uv
 ```bash
-# Listar subscriptions
-az account list --output table
+# Inicializar projeto Python com uv
+uv init
 
-# Definir subscription ativa (se necessário)
-az account set --subscription "sua-subscription-id"
+# Criar ambiente virtual
+uv venv
+
+# Ativar ambiente virtual (Windows)
+.venv\Scripts\activate
+
+# Ativar ambiente virtual (WSL/Linux)
+source .venv/bin/activate
+
+# Instalar dependências do projeto
+uv sync
+
+# Adicionar nova dependência
+uv add package-name
+
+# Adicionar dependência de desenvolvimento
+uv add --dev package-name
 ```
 
-## 📥 Fazer Pull de uma Function Existente
-
-### 1. Criar Diretório Local
+#### Comandos Úteis do uv
 ```bash
-# Criar pasta do projeto
-mkdir azure-functions
-cd azure-functions
-```
+# Ver dependências instaladas
+uv pip list
 
-### 2. Buscar Configurações da Function App
-```bash
-# Substituir pelos seus valores
-func azure functionapp fetch-app-settings NOME-DA-FUNCTION-APP --resource-group NOME-DO-RESOURCE-GROUP
+# Atualizar todas as dependências
+uv sync --upgrade
 
-# Exemplo do nosso projeto:
-func azure functionapp fetch-app-settings FAAS-Valuation --resource-group FAAS-Valuation_group
-```
+# Executar comando no ambiente virtual
+uv run python script.py
 
-### 3. Fazer Pull do Código
-```bash
-# Pull da function app completa
-func azure functionapp fetch NOME-DA-FUNCTION-APP --resource-group NOME-DO-RESOURCE-GROUP
+# Executar função local com uv
+uv run func start
 
-# Exemplo:
-func azure functionapp fetch FAAS-Valuation --resource-group FAAS-Valuation_group
+# Verificar dependências desatualizadas
+uv pip list --outdated
+
+# Remover dependência
+uv remove package-name
+
+# Exportar requirements.txt
+uv pip freeze > requirements.txt
 ```
 
 ## 🏗️ Criar Nova Function do Zero
@@ -179,56 +188,6 @@ curl http://localhost:7071/api/HttpTrigger1
 Invoke-RestMethod -Uri "http://localhost:7071/api/HttpTrigger1" -Method Get
 ```
 
-## 🚀 Deploy para Azure
-
-### 1. Criar Resource Group (se não existir)
-```bash
-az group create --name meu-resource-group --location "Brazil South"
-```
-
-### 2. Criar Storage Account
-```bash
-az storage account create --name meustorage123 --location "Brazil South" --resource-group meu-resource-group --sku Standard_LRS
-```
-
-### 3. Criar Function App
-```bash
-az functionapp create --resource-group meu-resource-group --consumption-plan-location "Brazil South" --runtime python --runtime-version 3.9 --functions-version 4 --name minha-function-app --storage-account meustorage123 --os-type linux
-```
-
-### 4. Fazer Deploy
-```bash
-func azure functionapp publish minha-function-app
-```
-
-## 🔄 Sincronizar Configurações
-
-### 1. Download das Configurações do Azure
-```bash
-# Baixar app settings do Azure para local
-func azure functionapp fetch-app-settings minha-function-app --resource-group meu-resource-group
-```
-
-### 2. Upload das Configurações Locais
-```bash
-# Subir configurações locais para Azure (cuidado!)
-func azure functionapp publish minha-function-app --publish-local-settings -i
-```
-
-## 📊 Verificar Deploy
-
-### 1. Testar Function no Azure
-```bash
-# URL da function será algo como:
-https://minha-function-app.azurewebsites.net/api/HttpTrigger1
-```
-
-### 2. Ver Logs no Portal
-1. Acesse portal.azure.com
-2. Vá para sua Function App
-3. Menu lateral → Functions → sua função
-4. Clique em "Monitor" para ver execuções
-
 ## 🔧 Comandos Úteis
 
 ```bash
@@ -261,102 +220,5 @@ echo '{"version": "2.0"}' > host.json
 # Adicionar no local.settings.json
 "AzureWebJobsStorage": "UseDevelopmentStorage=true"
 ```
-
-### Erro de Login MFA
-```bash
-# Usar device code
-az login --use-device-code
-```
-
-### Function não aparece no portal
-- Aguarde alguns minutos após deploy
-- Verifique se o deploy foi bem-sucedido
-- Confira se está no resource group correto
-
-## 📝 Checklist Final
-
-- [ ] Azure CLI instalado e logado
-- [ ] Functions Core Tools instalado
-- [ ] Projeto local configurado
-- [ ] local.settings.json configurado
-- [ ] Teste local funcionando
-- [ ] Deploy realizado com sucesso
-- [ ] Function acessível no Azure
-- [ ] Logs funcionando no portal
-
----
-
-**🎯 Objetivo:** Ter uma Azure Function funcionando localmente e no Azure em menos de 30 minutos!
-
-## 📊 Monitoramento
-
-### Application Insights
-- Logs de execução em tempo real
-- Métricas de performance
-- Rastreamento de erros
-- Análise de dependências
-
-### Acesso aos Logs
-1. Portal Azure → Function App → Monitoring → Logs
-2. Application Insights → Logs (KQL queries)
-3. Fluxo de logs em tempo real
-
-## 🔐 Segurança
-
-- Chaves de acesso gerenciadas via Azure Key Vault (recomendado)
-- Application Insights para auditoria
-- CORS configurado conforme necessário
-- Autenticação anônima (apenas para desenvolvimento)
-
-## 🚀 CI/CD
-
-### Configuração Atual
-- Deploy manual via Azure Functions Core Tools
-- Sincronização de configurações entre local e Azure
-- Monitoramento via Application Insights
-
-### Próximos Passos
-- [ ] Implementar GitHub Actions para CI/CD automatizado
-- [ ] Configurar ambientes de staging/produção
-- [ ] Implementar testes automatizados
-- [ ] Configurar autenticação para produção
-
-## 📝 Funcionalidades
-
-### Função Principal
-- **Nome**: HttpTrigger1
-- **Trigger**: HTTP (GET/POST)
-- **Resposta**: JSON com mensagem de sucesso
-- **Tratamento de Erros**: Retorna erro 500 em caso de exceção
-
-### Integrações
-- Azure OpenAI para processamento de IA
-- Azure Storage para persistência
-- Application Insights para observabilidade
-
-## 🛠️ Comandos Úteis
-
-```bash
-# Verificar versão do Core Tools
-func --version
-
-# Listar funções locais
-func list
-
-# Ver logs em tempo real (local)
-func start --verbose
-
-# Testar função específica
-func run HttpTrigger1
-
-# Sincronizar configurações
-func azure functionapp fetch-app-settings FAAS-Valuation
-```
-
-## 📚 Documentação
-
-- [Azure Functions Documentation](https://learn.microsoft.com/en-us/azure/azure-functions/)
-- [Azure Functions Core Tools](https://learn.microsoft.com/en-us/azure/azure-functions/functions-run-local)
-- [Python Developer Guide](https://learn.microsoft.com/en-us/azure/azure-functions/functions-reference-python)
 
 

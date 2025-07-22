@@ -237,12 +237,12 @@ class DocumentEntityExtractor:
             <items>
             ITENS QUE DEVEM SER EXTRAÍDOS COMO LISTAS:
 
-            1. **ATUALIZAÇÃO MONETÁRIA** – lista de índices que corrigem o **principal** por série
+            1. **ATUALIZAÇÃO MONETÁRIA** – lista de índices que corrigem o **principal** por série. Se o documento disser explicitamente que não haverá atualização, retorne "SEM ATUALIZAÇÃO MONETÁRIA".
             2. **JUROS REMUNERATÓRIOS** – lista de indexadores **principal** por série (DI, CDI, IPCA, etc.)
-            3. **SPREAD FIXO** – lista de percentuais adicionais por série
+            3. **SPREAD FIXO** – lista de percentuais adicionais por série.
             4. **BASE DE CÁLCULO** – lista de metodologias por série (252, 365, ACT/360)
-            5. **DATA EMISSÃO** – lista de datas de emissão por série
-            6. **DATA VENCIMENTO** – lista de datas de vencimento por série
+            5. **DATA EMISSÃO** – lista de datas de emissão por série. Extraia apenas datas indicadas como "data de emissão", "data de início" ou equivalente.
+            6. **DATA VENCIMENTO** – lista de datas de vencimento por série. Extraia apenas datas indicadas como "data de vencimento", "data final" ou equivalente.
             7. **VALOR NOMINAL UNITÁRIO** – lista de valores de face por série
             8. **FLUXOS DE PAGAMENTO** – lista de cronogramas de pagamento por série
             9. **FLUXOS PERCENTUAIS** – lista de percentuais de amortização por série
